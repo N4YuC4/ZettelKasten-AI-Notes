@@ -7,7 +7,6 @@ from PyQt5.QtCore import Qt, QThread # Added QThread
 import database_manager
 import note_manager # Import note_manager
 import pdf_processor
-from gemini_api_client import GeminiApiClient
 from ai_note_generator_worker import AiNoteGeneratorWorker # Import the new worker class
 
 import tkinter as tk

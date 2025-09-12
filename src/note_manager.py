@@ -1,6 +1,5 @@
 import re
 import uuid
-import database_manager
 
 def generate_unique_id():
     return str(uuid.uuid4())

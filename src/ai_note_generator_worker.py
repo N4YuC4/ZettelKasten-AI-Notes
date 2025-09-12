@@ -1,7 +1,7 @@
 from PyQt5.QtCore import QObject, pyqtSignal
 from gemini_api_client import GeminiApiClient
 import note_manager
-import database_manager # Added import
+import database_manager 
 
 class AiNoteGeneratorWorker(QObject):
     finished = pyqtSignal(list) # Emits a list of generated notes or an empty list on failure
