@@ -10,6 +10,18 @@ class DatabaseManager:
         self.conn = sqlite3.connect(DATABASE_FILE)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.create_notes_table()
+        self._create_settings_table()
+
+    def _create_settings_table(self):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        self.conn.commit()
+
 
     def create_notes_table(self):
         cursor = self.conn.cursor()

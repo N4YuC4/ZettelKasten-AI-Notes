@@ -1,20 +1,15 @@
 import google.generativeai as genai
 from dotenv import load_dotenv
 import os
+from database_manager import DatabaseManager # Import DatabaseManager
 
 class GeminiApiClient:
-    def __init__(self, api_key=None):
-        # Construct absolute path to .env file in the project root
-        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
-        load_dotenv(dotenv_path=env_path)
+    def __init__(self):
+        load_dotenv() # Load environment variables from .env file
+        api_key = os.getenv("GEMINI_API_KEY")
 
-        # If an API key is not passed directly, try to get it from the environment.
-        if api_key is None:
-            api_key = os.getenv("GEMINI_API_KEY")
-
-        # Raise an error if the API key is still not found.
         if not api_key:
-            raise ValueError("GEMINI_API_KEY not found. Please set it as an environment variable or pass it to the constructor.")
+            raise ValueError("Gemini API Key not found. Please set the GEMINI_API_KEY environment variable in a .env file or via the application's menu (Settings -> Enter Gemini API Key).")
 
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
@@ -26,20 +21,23 @@ class GeminiApiClient:
             text_content (str): The text content from which to generate notes.
         Returns:
             list: A list of generated notes, where each note is a dictionary
-                  with 'title' and 'content' keys.
+                  with 'general_title', 'title', 'content' and 'connections' keys.
         """
-        prompt = f"""You are an AI assistant specialized in generating Zettelkasten-style notes.
+        prompt = f"""You are an AI assistant specialized in generating Zettelkasten-style notes. all notes should be concise, focused on a single idea, and formatted in markdown. Make sure markdown formatting is perfectly correct.     
+The notes language should be what documents language is.
 From the following text, extract key concepts, arguments, and insights.
 For each insight, create a concise Zettelkasten note. Each note should be self-contained and atomic.
 
-Format your output as a JSON array of objects, where each object has a  'title', 'content' and 'connections' key.
+Format your output as a JSON array of objects, where each object has a 'general_title', 'title', 'content' and 'connections' key.
 
-each 'connections' key should contain a list of titles of related notes (can be empty if no connections) but make sure to include all relevant connections.
+The 'general_title' should be a single title about what all notes talking about.
+
+Each 'connections' key should contain a list of titles of related notes (can be empty if no connections) but make sure to include all relevant connections.
 
 Example:
 [
-  {{"title": "Concept of Zettelkasten", "content": "Zettelkasten is a personal knowledge management and note-taking method used in research and study. It consists of individual notes with unique IDs, interconnected by links.", "connections": []}},
-  {{"title": "Atomic Notes Principle", "content": "Each Zettelkasten note should contain only one idea or concept to ensure atomicity and reusability.", "connections": []}}
+  {{"general_title": "Zettelkasten Method", "title": "Concept of Zettelkasten", "content": "Zettelkasten is a personal knowledge management and note-taking method used in research and study. It consists of individual notes with unique IDs, interconnected by links.", "connections": []}},
+  {{"general_title": "Zettelkasten Method", "title": "Atomic Notes Principle", "content": "Each Zettelkasten note should contain only one idea or concept to ensure atomicity and reusability.", "connections": []}}
 ]
 
 Text to process:

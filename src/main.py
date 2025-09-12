@@ -1,5 +1,6 @@
 import sys
 import os
+from dotenv import set_key
 import re
 import markdown
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QPushButton, QMainWindow, QAction, QFileDialog, QListWidget, QSplitter, QMessageBox, QInputDialog, QHBoxLayout, QComboBox, QStyle # Added QStyle 
@@ -14,7 +15,6 @@ from tkinter import filedialog
 import tkinter as tk
 from tkinter import filedialog
 
-# ... (rest of your imports)
 
 class ZettelkastenApp(QMainWindow):
     def __init__(self):
@@ -106,6 +106,27 @@ class ZettelkastenApp(QMainWindow):
         self.preview.setPlaceholderText("Markdown önizlemesi burada görünecek...")
         self.editor_preview_splitter.addWidget(self.preview)
 
+        self.create_menu_bar()
+
+    def create_menu_bar(self):
+        menubar = self.menuBar()
+        settings_menu = menubar.addMenu("Settings")
+
+        # Action for Gemini API Key
+        gemini_api_key_action = QAction("Enter Gemini API Key", self)
+        gemini_api_key_action.triggered.connect(self._show_api_key_dialog)
+        settings_menu.addAction(gemini_api_key_action)
+
+    def _show_api_key_dialog(self):
+        api_key, ok = QInputDialog.getText(self, "Gemini API Key", "Enter your Gemini API Key:")
+        if ok and api_key:
+            # Save the API key to a .env file
+            dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
+            set_key(dotenv_path, "GEMINI_API_KEY", api_key)
+            QMessageBox.information(self, "Gemini API Key", "Gemini API Key saved to .env file. Please restart the application for changes to take effect.")
+        elif ok and not api_key:
+            QMessageBox.warning(self, "Gemini API Key", "API Key cannot be empty.")
+
     def create_new_category(self):
         category_name, ok = QInputDialog.getText(self, "New Category", "Enter category name:")
         if ok and category_name:
@@ -120,7 +141,7 @@ class ZettelkastenApp(QMainWindow):
             self.current_note_category = category_name
             self.editor.setPlainText(f"# New note in {category_name}\n\nStart writing your note here...")
             self.save_note()
-            QMessageBox.warning(self, "New Category", f"Category '{category_name}' created and a new note added.")
+            QMessageBox.information(self, "New Category", f"Category '{category_name}' created and a new note added.")
             self.load_notes(category_to_select=category_name) # Pass the new category name
             # self.category_combo_box.setCurrentText(category_name) # This line is no longer needed here
 
@@ -239,9 +260,6 @@ class ZettelkastenApp(QMainWindow):
             else:
                 QMessageBox.critical(self, "Error", "Failed to delete category.")
 
-
-
-
     def generate_notes_from_pdf(self):
         # Hide the main window temporarily to prevent it from interfering with Tkinter's dialog
         self.hide()
@@ -270,12 +288,13 @@ class ZettelkastenApp(QMainWindow):
                         for note in generated_notes:
                             title = note.get('title', 'Untitled Note')
                             content = note.get('content', '')
+                            category = note.get('general_title', 'AI Generated') # Use general_title as category, default to 'AI Generated' 
                             if title and content:
                                 # Save each generated note as a new note
-                                self.db_manager.save_note(None, f"# {title}\n\n{content}", "AI Generated") # Assign to a new category
+                                self.db_manager.save_note(None, f"# {title}\n\n{content}", category) # Assign to the correct category
                                 notes_saved_count += 1
                         QMessageBox.information(self, "Notes Generated", f"Successfully generated and saved {notes_saved_count} notes from PDF.")
-                        self.load_notes(category_to_select="AI Generated") # Reload notes to show the new ones
+                        self.load_notes(category_to_select=category) # Reload notes to show the new ones
                     else:
                         QMessageBox.warning(self, "Notes Generation Failed", "AI did not generate any notes from the PDF content.")
                 except ValueError as ve:
