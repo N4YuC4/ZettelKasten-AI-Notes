@@ -136,3 +136,7 @@ class DatabaseManager:
                        (new_title, now, note_id))
         self.conn.commit()
         return True, new_title # Return success and the new title
+
+    def close_connection(self):
+        if self.conn:
+            self.conn.close()

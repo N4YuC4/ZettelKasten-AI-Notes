@@ -2,15 +2,13 @@ import sys
 import os
 from dotenv import set_key
 import markdown
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QPushButton, QMainWindow, QAction, QListWidget, QSplitter, QMessageBox, QInputDialog, QHBoxLayout, QComboBox, QStyle, QMenu # Added QStyle, QMenu 
-from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QPushButton, QMainWindow, QAction, QListWidget, QSplitter, QMessageBox, QInputDialog, QHBoxLayout, QComboBox, QStyle, QMenu, QProgressDialog # Added QStyle, QMenu, QProgressDialog 
+from PyQt5.QtCore import Qt, QThread # Added QThread
 import database_manager
 import note_manager # Import note_manager
 import pdf_processor
 from gemini_api_client import GeminiApiClient
-
-import tkinter as tk
-from tkinter import filedialog
+from ai_note_generator_worker import AiNoteGeneratorWorker # Import the new worker class
 
 import tkinter as tk
 from tkinter import filedialog
@@ -302,29 +300,33 @@ class ZettelkastenApp(QMainWindow):
             extracted_text = pdf_processor.extract_text_from_pdf(pdf_path)
 
             if extracted_text:
-                QMessageBox.information(self, "Processing PDF", "Text extracted. Generating notes with AI... This may take longer.")
-                try:
-                    gemini_client = GeminiApiClient()
-                    generated_notes = gemini_client.generate_zettelkasten_notes(extracted_text)
+                # Create and show the loading dialog
+                self.loading_dialog = QProgressDialog("Generating notes with AI... This may take longer.", None, 0, 0, self) # Assign to self.loading_dialog
+                self.loading_dialog.setWindowModality(Qt.WindowModal)
+                self.loading_dialog.setCancelButton(None) # Disable the cancel button
+                self.loading_dialog.setWindowTitle("Processing PDF")
+                self.loading_dialog.show()
+                QApplication.processEvents() # Ensure the dialog is painted before the long-running task
 
-                    if generated_notes:
-                        notes_saved_count = 0
-                        for note in generated_notes:
-                            title = note.get('title', 'Untitled Note')
-                            content = note.get('content', '')
-                            category = note.get('general_title', 'AI Generated') # Use general_title as category, default to 'AI Generated' 
-                            if title and content:
-                                # Save each generated note as a new note
-                                note_manager.save_note(self.db_manager, None, f"# {title}\n\n{content}", category) # Assign to the correct category
-                                notes_saved_count += 1
-                        QMessageBox.information(self, "Notes Generated", f"Successfully generated and saved {notes_saved_count} notes from PDF.")
-                        self.load_notes(category_to_select=category) # Reload notes to show the new ones
-                    else:
-                        QMessageBox.warning(self, "Notes Generation Failed", "AI did not generate any notes from the PDF content.")
-                except ValueError as ve:
-                    QMessageBox.critical(self, "API Key Error", str(ve))
-                except Exception as e:
-                    QMessageBox.critical(self, "AI Generation Error", f"An error occurred during AI note generation: {e}")
+                # Create a QThread object
+                self.thread = QThread()
+                # Create a worker object
+                self.worker = AiNoteGeneratorWorker(extracted_text)
+                # Move worker to the thread
+                self.worker.moveToThread(self.thread)
+
+                # Connect signals and slots
+                self.thread.started.connect(self.worker.run)
+                self.worker.finished.connect(self.handle_ai_generation_finished)
+                self.worker.error.connect(self.handle_ai_generation_error)
+                self.worker.finished.connect(self.thread.quit)
+                self.worker.error.connect(self.thread.quit)
+                self.worker.finished.connect(self.worker.deleteLater)
+                self.worker.error.connect(self.worker.deleteLater)
+                self.thread.finished.connect(self.thread.deleteLater)
+
+                # Start the thread
+                self.thread.start()
             else:
                 QMessageBox.warning(self, "PDF Processing Failed", "Could not extract text from the selected PDF file.")
         else:
@@ -410,6 +412,39 @@ class ZettelkastenApp(QMainWindow):
         markdown_text = self.editor.toPlainText()
         html = markdown.markdown(markdown_text)
         self.preview.setHtml(html)
+
+    def handle_ai_generation_finished(self, generated_notes):
+        if self.loading_dialog:
+            self.loading_dialog.close()
+            self.loading_dialog = None # Clear the reference
+
+        if generated_notes:
+            for note in generated_notes:
+                title = note.get('title', 'Untitled Note')
+                content = note.get('content', '')
+                category = note.get('general_title', 'AI Generated')
+                if title and content:
+                    # Save each generated note
+                    note_id, display_title = note_manager.save_note(
+                        self.db_manager,
+                        None, # New note
+                        f"# {title}\n\n{content}",
+                        category # Assign to current category
+                    )
+                    if not note_id:
+                        QMessageBox.critical(self, "Error", f"Failed to save AI generated note: {title}")
+            QMessageBox.information(self, "AI Note Generation", "Notes generated and saved successfully!")
+            self.load_notes(category_to_select=self.current_note_category) # Reload notes to show new ones
+        else:
+            QMessageBox.warning(self, "AI Note Generation", "No notes were generated by the AI.")
+
+    def handle_ai_generation_error(self, message):
+        if self.loading_dialog:
+            self.loading_dialog.close()
+            self.loading_dialog = None # Clear the reference
+        QMessageBox.critical(self, "AI Note Generation Error", f"An error occurred during AI note generation: {message}")
+
+    
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

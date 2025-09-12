@@ -1,6 +1,7 @@
 import google.generativeai as genai
 from dotenv import load_dotenv
 import os
+import json # Import json
 from database_manager import DatabaseManager # Import DatabaseManager
 
 class GeminiApiClient:
@@ -46,13 +47,22 @@ Text to process:
         try:
             response = self.model.generate_content(prompt)
             notes_json_str = response.text
-            # Strip markdown code block delimiters if present
-            if notes_json_str.startswith('```json') and notes_json_str.endswith('```'):
-                notes_json_str = notes_json_str[len('```json\n'):-len('\n```')]
             print(f"DEBUG: Raw Gemini API response (stripped): {notes_json_str}")
-            import json
-            notes = json.loads(notes_json_str)
+            
+            try:
+                notes = json.loads(notes_json_str)
+            except json.JSONDecodeError:
+                # If direct parsing fails, try stripping markdown code block delimiters
+                if notes_json_str.startswith('```json') and notes_json_str.endswith('```'):
+                    notes_json_str = notes_json_str[len('```json\n'):-len('\n```')]
+                    notes = json.loads(notes_json_str)
+                else:
+                    raise # Re-raise if stripping doesn't help
+
             return notes
+        except json.JSONDecodeError as jde:
+            print(f"Error parsing JSON from Gemini API: {jde}")
+            return []
         except Exception as e:
             print(f"Error generating notes with Gemini API: {e}")
             return []
