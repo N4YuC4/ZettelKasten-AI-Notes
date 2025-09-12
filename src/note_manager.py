@@ -10,64 +10,76 @@ def get_sanitized_title(content):
     if not first_line:
         return "Untitled Note"
 
-    # Remove Markdown heading syntax (e.g., #, ##, etc.)
-    title_without_markdown = re.sub(r'^#+\s*', '', first_line).strip()
+    # 1. Remove Markdown heading syntax (e.g., #, ##, etc.) from the beginning of the line
+    sanitized_title = re.sub(r'^#+\s*', '', first_line)
 
+    # 2. Remove other common Markdown formatting characters
+    # This regex will remove:
+    # - Bold/Italic (**text**, *text*, __text__, _text_)
+    # - Inline code (`code`)
+    # - Strikethrough (~~text~~)
+    # - Links and images (![alt](url) or [text](url))
+    # - Other special characters that might interfere with titles
+    sanitized_title = re.sub(r'(\*\*|__|\*|_|`|~|!\[.*?\]\(.*?\)|\s*\[.*?]\(.*?\))', '', sanitized_title)
+    
     # Remove invalid characters for filenames (though less critical for DB titles)
-    sanitized_title = re.sub(r'[<>:"/\\|?*]', '', title_without_markdown)
-    # Replace spaces with underscores or hyphens for consistency, though not strictly needed for DB
-    sanitized_title = sanitized_title.replace(' ', '_')
+    sanitized_title = re.sub(r'[<>:"/\\|?*]', '', sanitized_title)
+    
+    # Remove any leading/trailing whitespace that might result from sanitization
+    sanitized_title = sanitized_title.strip()
+
     return sanitized_title[:50] # Limit title length
 
-def save_note(note_id, note_content, category_path=""):
+def save_note(db_manager, note_id, note_content, category_path=""):
     sanitized_title = get_sanitized_title(note_content)
     
     if note_id is None:
         new_note_id = generate_unique_id()
-        database_manager.insert_note(new_note_id, sanitized_title, note_content, category_path)
+        db_manager.insert_note(new_note_id, sanitized_title, note_content, category_path)
         return new_note_id, sanitized_title # Return ID and title for main.py to update state
     else:
-        database_manager.update_note(note_id, sanitized_title, note_content, category_path)
+        db_manager.update_note(note_id, sanitized_title, note_content, category_path)
         return note_id, sanitized_title # Return ID and title for main.py to update state
 
-def delete_note(note_id):
+def delete_note(db_manager, note_id):
     try:
-        database_manager.delete_note(note_id)
+        db_manager.delete_note(note_id)
         print(f"Note with ID {note_id} deleted from database.")
         return True
     except Exception as e:
         print(f"Error deleting note from database: {e}")
         return False
 
-def rename_note(note_id, new_title, category_path=""):
+def rename_note(db_manager, note_id, new_title, category_path=""):
     sanitized_new_title = get_sanitized_title(new_title)
     if not sanitized_new_title:
         return False, "New title cannot be empty or result in an empty sanitized title."
 
     # Retrieve current content to update it with new title
-    note_data = database_manager.get_note(note_id)
+    note_data = db_manager.get_note(note_id)
     if note_data:
         current_content = note_data[2] # content is at index 2
-        database_manager.update_note(note_id, sanitized_new_title, current_content, category_path)
+        db_manager.update_note(note_id, sanitized_new_title, current_content, category_path)
         print(f"Note with ID {note_id} renamed to {sanitized_new_title}.")
         return True, sanitized_new_title
     else:
         return False, "Note not found."
 
-def load_all_notes_metadata():
+def load_all_notes_metadata(db_manager):
+    notes_metadata_from_db, all_categories_from_db = db_manager.get_all_notes_metadata()
+    
     notes_metadata = [] # List of (display_title, note_id, category_path)
     all_categories = set()
 
-    db_notes = database_manager.get_all_notes_metadata()
-    for note_id, title, category in db_notes:
-        notes_metadata.append((title.replace("_", " "), note_id, category))
+    for note_id, title, category in notes_metadata_from_db:
+        notes_metadata.append((note_id, title, category))
         if category:
             all_categories.add(category)
             
-    return notes_metadata, sorted(list(all_categories))
+    return notes_metadata, sorted(list(all_categories_from_db))
 
-def get_note_content(note_id):
-    note_data = database_manager.get_note(note_id)
+def get_note_content(db_manager, note_id):
+    note_data = db_manager.get_note(note_id)
     if note_data:
         return note_data[2] # content is at index 2
     return None

@@ -1,11 +1,11 @@
 import sys
 import os
 from dotenv import set_key
-import re
 import markdown
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QPushButton, QMainWindow, QAction, QFileDialog, QListWidget, QSplitter, QMessageBox, QInputDialog, QHBoxLayout, QComboBox, QStyle # Added QStyle 
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QTextEdit, QPushButton, QMainWindow, QAction, QListWidget, QSplitter, QMessageBox, QInputDialog, QHBoxLayout, QComboBox, QStyle, QMenu # Added QStyle, QMenu 
 from PyQt5.QtCore import Qt
 import database_manager
+import note_manager # Import note_manager
 import pdf_processor
 from gemini_api_client import GeminiApiClient
 
@@ -88,6 +88,8 @@ class ZettelkastenApp(QMainWindow):
         # Notes List (Left Pane)
         self.notes_list_widget = QListWidget()
         self.notes_list_widget.itemClicked.connect(self.open_selected_note)
+        self.notes_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.notes_list_widget.customContextMenuRequested.connect(self._show_note_context_menu)
         self.splitter.addWidget(self.notes_list_widget)
 
         # Editor/Preview Splitter (Right Pane)
@@ -117,6 +119,26 @@ class ZettelkastenApp(QMainWindow):
         gemini_api_key_action.triggered.connect(self._show_api_key_dialog)
         settings_menu.addAction(gemini_api_key_action)
 
+    def _show_note_context_menu(self, position):
+        # Get the item at the clicked position
+        item = self.notes_list_widget.itemAt(position)
+
+        if item:
+            # Select the item to ensure rename/delete functions work correctly
+            self.notes_list_widget.setCurrentItem(item)
+
+            context_menu = QMenu(self)
+
+            rename_action = context_menu.addAction("Rename Note")
+            delete_action = context_menu.addAction("Delete Note")
+
+            action = context_menu.exec_(self.notes_list_widget.mapToGlobal(position))
+
+            if action == rename_action:
+                self.rename_note()
+            elif action == delete_action:
+                self.delete_note()
+
     def _show_api_key_dialog(self):
         api_key, ok = QInputDialog.getText(self, "Gemini API Key", "Enter your Gemini API Key:")
         if ok and api_key:
@@ -131,7 +153,7 @@ class ZettelkastenApp(QMainWindow):
         category_name, ok = QInputDialog.getText(self, "New Category", "Enter category name:")
         if ok and category_name:
             # Check if category already exists
-            all_notes_metadata, all_categories = self.db_manager.get_all_notes_metadata()
+            all_notes_metadata, all_categories = note_manager.load_all_notes_metadata(self.db_manager)
             if category_name in all_categories:
                 QMessageBox.warning(self, "New Category", f"Category '{category_name}' already exists.")
                 return
@@ -161,7 +183,8 @@ class ZettelkastenApp(QMainWindow):
         # Use self.current_note_category instead of self.category_combo_box.currentText()
         category_to_save = self.current_note_category if self.current_note_category != "All Notes" else ""
 
-        note_id, display_title = self.db_manager.save_note(
+        note_id, display_title = note_manager.save_note(
+            self.db_manager, 
             self.current_note_id, 
             note_content, 
             category_to_save
@@ -192,7 +215,8 @@ class ZettelkastenApp(QMainWindow):
                                             text=selected_display_title)
 
         if ok and new_title:
-            success, new_display_title = self.db_manager.rename_note(
+            success, new_display_title = note_manager.rename_note(
+                self.db_manager, 
                 note_id_to_rename, 
                 new_title, 
                 self.note_id_to_category.get(note_id_to_rename, "")
@@ -226,7 +250,7 @@ class ZettelkastenApp(QMainWindow):
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes:
-            success = self.db_manager.delete_note(note_id_to_delete)
+            success = note_manager.delete_note(self.db_manager, note_id_to_delete)
             if success:
                 self.new_note() # Clear editor and preview after deletion
                 self.load_notes(category_to_select=self.category_combo_box.currentText() if self.category_combo_box.currentText() != "All Notes" else "") # Reload notes to update the list, try to keep current category
@@ -291,7 +315,7 @@ class ZettelkastenApp(QMainWindow):
                             category = note.get('general_title', 'AI Generated') # Use general_title as category, default to 'AI Generated' 
                             if title and content:
                                 # Save each generated note as a new note
-                                self.db_manager.save_note(None, f"# {title}\n\n{content}", category) # Assign to the correct category
+                                note_manager.save_note(self.db_manager, None, f"# {title}\n\n{content}", category) # Assign to the correct category
                                 notes_saved_count += 1
                         QMessageBox.information(self, "Notes Generated", f"Successfully generated and saved {notes_saved_count} notes from PDF.")
                         self.load_notes(category_to_select=category) # Reload notes to show the new ones
@@ -323,7 +347,7 @@ class ZettelkastenApp(QMainWindow):
         self.displayed_title_to_note_id = {}
         self.note_id_to_category = {}
 
-        all_notes_metadata, all_categories = self.db_manager.get_all_notes_metadata()
+        all_notes_metadata, all_categories = note_manager.load_all_notes_metadata(self.db_manager)
         print(f"DEBUG: all_categories: {all_categories}") # Added debug print
 
         # Populate categories in the combo box
@@ -374,7 +398,7 @@ class ZettelkastenApp(QMainWindow):
         self.current_note_id = note_id
         self.current_note_category = note_category
         
-        content = self.db_manager.read_note_content(self.current_note_id)
+        content = note_manager.get_note_content(self.db_manager, self.current_note_id)
         if content is not None:
             self.editor.setPlainText(content)
             self.setWindowTitle(f"Zettelkasten AI Notes - {selected_display_title}")
