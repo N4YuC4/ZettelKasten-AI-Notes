@@ -74,7 +74,7 @@ class ZettelkastenApp(QMainWindow):
         self.delete_button.clicked.connect(self.delete_note)
         self.button_layout.addWidget(self.delete_button)
 
-        self.generate_notes_button = QPushButton(style.standardIcon(QStyle.SP_FileDialogDetailedView), "Generate Notes from PDF")
+        self.generate_notes_button = QPushButton(style.standardIcon(QStyle.SP_FileDialogDetailedView), "Generate AI Notes from PDF")
         self.generate_notes_button.clicked.connect(self.generate_notes_from_pdf)
         self.button_layout.addWidget(self.generate_notes_button)
 
@@ -295,17 +295,20 @@ class ZettelkastenApp(QMainWindow):
         self.show() # Show the main window again
 
         if pdf_path:
-            QMessageBox.information(self, "Processing PDF", "Extracting text from PDF... This may take a moment.")
+            # Create and show the loading dialog for PDF extraction
+            self.loading_dialog = QProgressDialog("Extracting text from PDF... This may take a moment.", None, 0, 0, self)
+            self.loading_dialog.setWindowModality(Qt.WindowModal)
+            self.loading_dialog.setCancelButton(None) # Disable the cancel button
+            self.loading_dialog.setWindowTitle("Generating AI Notes From PDF")
+            self.loading_dialog.show()
+            QApplication.processEvents() # Ensure the dialog is painted before the long-running task
+
             extracted_text = pdf_processor.extract_text_from_pdf(pdf_path)
 
             if extracted_text:
-                # Create and show the loading dialog
-                self.loading_dialog = QProgressDialog("Generating notes with AI... This may take longer.", None, 0, 0, self) # Assign to self.loading_dialog
-                self.loading_dialog.setWindowModality(Qt.WindowModal)
-                self.loading_dialog.setCancelButton(None) # Disable the cancel button
-                self.loading_dialog.setWindowTitle("Processing PDF")
-                self.loading_dialog.show()
-                QApplication.processEvents() # Ensure the dialog is painted before the long-running task
+                # Update the loading dialog for AI note generation
+                self.loading_dialog.setLabelText("Generating notes with AI... This may take longer.")
+                QApplication.processEvents() # Ensure the dialog is updated
 
                 # Create a QThread object
                 self.thread = QThread()
