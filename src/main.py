@@ -719,7 +719,7 @@ if __name__ == '__main__':
     # Uygulama başlangıcında debug mesajı yazmak için yardımcı fonksiyon
     def log_debug_startup(msg):
         print(msg)
-        with open("debug.log", "a", encoding="utf-8") as f:
+        with open("logs/debug.log", "a", encoding="utf-8") as f:
             f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
     log_debug_startup("DEBUG: Uygulama başlatıldı ve debug.log dosyası test edildi.")
     app = QApplication(sys.argv) # QApplication nesnesini oluştur
