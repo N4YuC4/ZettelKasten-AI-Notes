@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QStyle, QMenu, QProgressDialog, QDialog, QLabel, QLineEdit,
     QListWidgetItem
 )
-from PyQt5.QtCore import Qt, QThread # Qt temel tipleri ve çoklu iş parçacığı (threading) için
+from PyQt5.QtCore import Qt, QThread, QSettings # Qt temel tipleri, çoklu iş parçacığı (threading) ve ayarlar için
 
 # Uygulamanın diğer modülleri
 import database_manager # Veritabanı işlemleri için
@@ -128,12 +128,26 @@ class ZettelkastenApp(QMainWindow):
         self.init_ui() # Kullanıcı arayüzünü başlat
         self.load_notes() # Notları yükle
 
+        self.settings = QSettings("Zettelkasten", "AI Notes") # Uygulama ayarlarını başlat
+
+        # Splitter konumlarını yükle
+        if self.settings.contains("splitter_state"):
+            self.splitter.restoreState(self.settings.value("splitter_state"))
+        if self.settings.contains("editor_preview_splitter_state"):
+            self.editor_preview_splitter.restoreState(self.settings.value("editor_preview_splitter_state"))
+
         # Load and apply theme from settings
         saved_theme = self.db_manager.get_setting("UI_THEME")
         if saved_theme:
             self.apply_theme(saved_theme)
         else:
             self.apply_theme("Light") # Default theme
+
+    def closeEvent(self, event):
+        # Splitter konumlarını kaydet
+        self.settings.setValue("splitter_state", self.splitter.saveState())
+        self.settings.setValue("editor_preview_splitter_state", self.editor_preview_splitter.saveState())
+        super().closeEvent(event)
 
     def apply_theme(self, theme_name):
         stylesheet_path = os.path.join(os.path.dirname(__file__), f'{theme_name.lower()}_theme.qss')
