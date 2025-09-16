@@ -5,5 +5,5 @@ __pycache__/
 .vscode/
 .idea/
 db/
-debug.log
+logs/debug.log
 GEMINI.md
