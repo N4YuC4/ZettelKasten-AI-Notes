@@ -10,6 +10,7 @@ class DatabaseManager:
         self.conn = sqlite3.connect(DATABASE_FILE)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.create_notes_table()
+        self.create_note_links_table()
         self._create_settings_table()
 
     def _create_settings_table(self):
@@ -36,6 +37,55 @@ class DatabaseManager:
             )
         """)
         self.conn.commit()
+
+    def create_note_links_table(self):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS note_links (
+                source_note_id TEXT NOT NULL,
+                target_note_id TEXT NOT NULL,
+                PRIMARY KEY (source_note_id, target_note_id),
+                FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_note_id) REFERENCES notes(id) ON DELETE CASCADE
+            )
+        """)
+        self.conn.commit()
+
+    def insert_note_link(self, source_note_id, target_note_id):
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO note_links (source_note_id, target_note_id)
+                VALUES (?, ?)
+            """, (source_note_id, target_note_id))
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            # Link already exists
+            return False
+
+    def get_note_links(self, note_id):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT target_note_id FROM note_links WHERE source_note_id = ?
+            UNION
+            SELECT source_note_id FROM note_links WHERE target_note_id = ?
+        """, (note_id, note_id))
+        return [row[0] for row in cursor.fetchall()]
+
+    def delete_note_link(self, source_note_id, target_note_id):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            DELETE FROM note_links WHERE source_note_id = ? AND target_note_id = ?
+        """, (source_note_id, target_note_id))
+        self.conn.commit()
+        return cursor.rowcount > 0 # Returns True if a link was deleted, False otherwise
+
+    def get_note_id_by_title(self, title):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM notes WHERE title = ?", (title,))
+        result = cursor.fetchone()
+        return result[0] if result else None
 
     def insert_note(self, note_id, title, content, category=""):
         cursor = self.conn.cursor()
@@ -136,6 +186,11 @@ class DatabaseManager:
                        (new_title, now, note_id))
         self.conn.commit()
         return True, new_title # Return success and the new title
+
+    def get_all_note_titles_and_ids(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT title, id FROM notes")
+        return {title: note_id for title, note_id in cursor.fetchall()}
 
     def close_connection(self):
         if self.conn:

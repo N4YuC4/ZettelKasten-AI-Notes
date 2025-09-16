@@ -2,6 +2,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from gemini_api_client import GeminiApiClient
 import note_manager
 import database_manager 
+from main import log_debug # Import log_debug
 
 class AiNoteGeneratorWorker(QObject):
     finished = pyqtSignal(list) # Emits a list of generated notes or an empty list on failure
@@ -20,15 +21,39 @@ class AiNoteGeneratorWorker(QObject):
             generated_notes = gemini_client.generate_zettelkasten_notes(self.extracted_text)
 
             if generated_notes:
+                # Load existing notes into title_to_id for comprehensive lookup
+                title_to_id = db_manager_worker.get_all_note_titles_and_ids()
+                log_debug(f"DEBUG: Initial title_to_id: {title_to_id}")
+                note_ids = []
                 notes_saved_count = 0
-                for note in generated_notes:
-                    title = note.get('title', 'Untitled Note')
-                    content = note.get('content', '')
-                    category = note.get('general_title', 'AI Generated')
+
+                # Phase 1: Save all notes and populate title_to_id with newly saved notes
+                for note_data in generated_notes:
+                    title = note_data.get('title', 'Untitled Note')
+                    content = note_data.get('content', '')
+                    category = note_data.get('general_title', 'AI Generated')
                     if title and content:
-                        # Use the worker's own db_manager
-                        note_manager.save_note(db_manager_worker, None, f"# {title}\n\n{content}", category)
+                        new_note_id, saved_title = note_manager.save_note(db_manager_worker, None, f"# {title}\n\n{content}", category)
+                        title_to_id[saved_title] = new_note_id # Add/update with newly saved note
+                        note_ids.append(new_note_id)
                         notes_saved_count += 1
+                        log_debug(f"DEBUG: Saved note '{saved_title}' with ID '{new_note_id}'")
+                log_debug(f"DEBUG: Final title_to_id after new notes: {title_to_id}")
+
+                # Phase 2: Add connections after all notes have been saved
+                for i, note_data in enumerate(generated_notes):
+                    source_id = note_ids[i]
+                    connections = note_data.get('connections', [])
+                    for target_title_raw in connections:
+                        sanitized_target_title = note_manager.get_sanitized_title(target_title_raw)
+                        log_debug(f"DEBUG: Looking for target_title {repr(sanitized_target_title)} (len: {len(sanitized_target_title)}, raw: {repr(target_title_raw)}) in title_to_id.")
+                        target_id = title_to_id.get(sanitized_target_title)
+                        if target_id:
+                            log_debug(f"DEBUG: Found target_id '{target_id}' for '{sanitized_target_title}'. Inserting link from '{source_id}' to '{target_id}'.")
+                            log_debug(f"DEBUG: Attempting to insert link: Source ID: {source_id}, Target ID: {target_id}, Raw Target Title: {target_title_raw}")
+                            db_manager_worker.insert_note_link(source_id, target_id)
+                        else:
+                            log_debug(f"DEBUG: Could not find target_id for '{sanitized_target_title}' (raw: '{target_title_raw}'). Link not inserted.")
                 self.finished.emit(generated_notes)
             else:
                 self.error.emit("AI did not generate any notes from the PDF content.")

@@ -1,5 +1,6 @@
 import re
 import uuid
+from main import log_debug # Import log_debug
 
 def generate_unique_id():
     return str(uuid.uuid4())
@@ -12,41 +13,53 @@ def get_sanitized_title(content):
     # 1. Remove Markdown heading syntax (e.g., #, ##, etc.) from the beginning of the line
     sanitized_title = re.sub(r'^#+\s*', '', first_line)
 
-    # 2. Remove other common Markdown formatting characters
+    # 2. Remove content within parentheses, brackets, and curly braces
+    sanitized_title = re.sub(r'\(.*?\[.*?]\[.*?]', '', sanitized_title)
+
+    # 3. Remove other common Markdown formatting characters and invalid characters for titles
     # This regex will remove:
     # - Bold/Italic (**text**, *text*, __text__, _text_)
     # - Inline code (`code`)
     # - Strikethrough (~~text~~)
     # - Links and images (![alt](url) or [text](url))
     # - Other special characters that might interfere with titles
-    sanitized_title = re.sub(r'(\*\*|__|\*|_|`|~|!\[.*?\]\(.*?\)|\s*\[.*?]\(.*?\))', '', sanitized_title)
-    
-    # Remove invalid characters for filenames (though less critical for DB titles)
-    sanitized_title = re.sub(r'[<>:"/\\|?*]', '', sanitized_title)
+    sanitized_title = re.sub(r'(\$\*\*|__|\*|_|`|~|!\[.*?]\[.*?]\]|\s*\[.*?]\[.*?]\]|\s*[<>:"/\\|?*])', '', sanitized_title)
     
     # Remove any leading/trailing whitespace that might result from sanitization
     sanitized_title = sanitized_title.strip()
 
-    return sanitized_title[:50] # Limit title length
+    return sanitized_title
 
 def save_note(db_manager, note_id, note_content, category_path=""):
     sanitized_title = get_sanitized_title(note_content)
     
-    if note_id is None:
+    if not sanitized_title: # Ensure title is not empty after sanitization
+        sanitized_title = "Untitled Note"
+
+    existing_note_id = db_manager.get_note_id_by_title(sanitized_title)
+
+    if existing_note_id:
+        # If a note with this title already exists, update it
+        log_debug(f"DEBUG: Found existing note with sanitized title '{sanitized_title}' and ID '{existing_note_id}'. Updating instead of creating new.")
+        db_manager.update_note(existing_note_id, sanitized_title, note_content, category_path)
+        return existing_note_id, sanitized_title
+    elif note_id is None:
+        # If no existing note and no note_id provided, create a new one
         new_note_id = generate_unique_id()
         db_manager.insert_note(new_note_id, sanitized_title, note_content, category_path)
-        return new_note_id, sanitized_title # Return ID and title for main.py to update state
+        return new_note_id, sanitized_title
     else:
+        # If note_id is provided, update the specific note (this path is for manual edits of existing notes)
         db_manager.update_note(note_id, sanitized_title, note_content, category_path)
-        return note_id, sanitized_title # Return ID and title for main.py to update state
+        return note_id, sanitized_title
 
 def delete_note(db_manager, note_id):
     try:
         db_manager.delete_note(note_id)
-        print(f"Note with ID {note_id} deleted from database.")
+        log_debug(f"Note with ID {note_id} deleted from database.")
         return True
     except Exception as e:
-        print(f"Error deleting note from database: {e}")
+        log_debug(f"Error deleting note from database: {e}")
         return False
 
 def rename_note(db_manager, note_id, new_title, category_path=""):
@@ -59,7 +72,7 @@ def rename_note(db_manager, note_id, new_title, category_path=""):
     if note_data:
         current_content = note_data[2] # content is at index 2
         db_manager.update_note(note_id, sanitized_new_title, current_content, category_path)
-        print(f"Note with ID {note_id} renamed to {sanitized_new_title}.")
+        log_debug(f"Note with ID {note_id} renamed to {sanitized_new_title}.")
         return True, sanitized_new_title
     else:
         return False, "Note not found."

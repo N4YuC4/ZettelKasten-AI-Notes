@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 import json # Import json
 from database_manager import DatabaseManager # Import DatabaseManager
+from main import log_debug # Import log_debug
 
 class GeminiApiClient:
     def __init__(self):
@@ -33,7 +34,16 @@ Format your output as a JSON array of objects, where each object has a 'general_
 
 The 'general_title' should be a single title about what all notes talking about.
 
-Each 'connections' key should contain a list of titles of related notes (can be empty if no connections) but make sure to include all relevant connections.
+Aim to create a rich network of *exceptionally relevant and semantically robust* interconnected notes. For every single connection, there MUST be a crystal-clear, undeniable conceptual link between the core ideas of the two notes. Connections should represent relationships such as:
+-   **Elaboration/Detail:** One note provides essential, deeper insight or specific examples for a concept introduced in another.
+-   **Causality (Cause/Effect):** One note directly causes or is a direct consequence of Note B.
+-   **Dependency (Prerequisite/Follow-up):** Understanding Note A is absolutely necessary to grasp Note B, or Note B logically extends from Note A.
+-   **Direct Comparison/Contrast:** Notes directly compare or highlight fundamental differences between specific concepts.
+-   **Concrete Example/Direct Application:** One note provides a specific, illustrative example or a practical application of a principle in Note B.
+-   **Direct Contradiction/Alternative Perspective:** Notes present opposing, mutually exclusive, or significantly different viewpoints on the SAME specific concept.
+Strictly avoid connections based on mere keyword overlap, general thematic association, or weak inferential links. If a note does not have an *unquestionably strong, direct, and conceptually indispensable* connection to another note within the generated set, you MUST NOT create a connection. Prioritize the highest possible quality and precision of connections, even if it means fewer links. **If there is any doubt about the strength or directness of a connection, DO NOT create it.** Focus on creating only the most essential and undeniable links.
+
+Each 'connections' key must contain a list of *exact titles* of other related notes that are also being generated in this JSON array. These titles must precisely match the 'title' field of the notes you generate. If a note has no *strong and direct* relevant connections within the generated set, this list can be empty.
 
 Example:
 [
@@ -47,7 +57,7 @@ Text to process:
         try:
             response = self.model.generate_content(prompt)
             notes_json_str = response.text
-            print(f"DEBUG: Raw Gemini API response (stripped): {notes_json_str}")
+            log_debug(f"DEBUG: Raw Gemini API response (full, len={len(notes_json_str)}): {notes_json_str}")
             
             try:
                 notes = json.loads(notes_json_str)
@@ -61,10 +71,10 @@ Text to process:
 
             return notes
         except json.JSONDecodeError as jde:
-            print(f"Error parsing JSON from Gemini API: {jde}")
+            log_debug(f"Error parsing JSON from Gemini API: {jde}")
             return []
         except Exception as e:
-            print(f"Error generating notes with Gemini API: {e}")
+            log_debug(f"Error generating notes with Gemini API: {e}")
             return []
 
 if __name__ == '__main__':
@@ -75,9 +85,9 @@ if __name__ == '__main__':
     # dummy_text = "The quick brown fox jumps over the lazy dog. This is a test sentence."
     # generated_notes = client.generate_zettelkasten_notes(dummy_text)
     # if generated_notes:
-    #     print("Generated Notes:")
+    #     log_debug("Generated Notes:")
     #     for note in generated_notes:
-    #         print(f"Title: {note['title']}")
-    #         print(f"Content: {note['content']}")
-    #         print("---")
+    #         log_debug(f"Title: {note['title']}")
+    #         log_debug(f"Content: {note['content']}")
+    #         log_debug("---")
     pass
