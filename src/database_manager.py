@@ -28,8 +28,8 @@ class DatabaseManager:
         cursor = self.conn.cursor() # Veritabanı imlecini al
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY, # Ayar anahtarı (benzersiz)
-                value TEXT # Ayar değeri
+                key TEXT PRIMARY KEY, --> Ayar anahtarı (benzersiz)
+                value TEXT --> Ayar değeri
             )
         """)
         self.conn.commit() # Değişiklikleri kaydet
@@ -39,12 +39,12 @@ class DatabaseManager:
         cursor = self.conn.cursor() # Veritabanı imlecini al
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS notes (
-                id TEXT PRIMARY KEY, # Notun benzersiz ID'si
-                title TEXT NOT NULL, # Notun başlığı (boş olamaz)
-                content TEXT, # Notun içeriği
-                category TEXT DEFAULT '', # Notun kategorisi (varsayılan boş)
-                created_at TEXT NOT NULL, # Oluşturulma zamanı
-                updated_at TEXT NOT NULL # Son güncelleme zamanı
+                id TEXT PRIMARY KEY, --> Notun benzersiz ID'si
+                title TEXT NOT NULL, --> Notun başlığı (boş olamaz)
+                content TEXT, --> Notun içeriği
+                category TEXT DEFAULT '', --> Notun kategorisi (varsayılan boş)
+                created_at TEXT NOT NULL, --> Oluşturulma zamanı
+                updated_at TEXT NOT NULL --> Son güncelleme zamanı
             )
         """)
         self.conn.commit() # Değişiklikleri kaydet
@@ -54,11 +54,11 @@ class DatabaseManager:
         cursor = self.conn.cursor() # Veritabanı imlecini al
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS note_links (
-                source_note_id TEXT NOT NULL, # Kaynak notun ID'si
-                target_note_id TEXT NOT NULL, # Hedef notun ID'si
-                PRIMARY KEY (source_note_id, target_note_id), # İki ID'nin kombinasyonu benzersiz olmalı
-                FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE CASCADE, # Kaynak not silinirse bağlantı da silinir
-                FOREIGN KEY (target_note_id) REFERENCES notes(id) ON DELETE CASCADE # Hedef not silinirse bağlantı da silinir
+                source_note_id TEXT NOT NULL, --> Kaynak notun ID'si
+                target_note_id TEXT NOT NULL, --> Hedef notun ID'si
+                PRIMARY KEY (source_note_id, target_note_id), --> İki ID'nin kombinasyonu benzersiz olmalı
+                FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE CASCADE, --> Kaynak not silinirse bağlantı da silinir
+                FOREIGN KEY (target_note_id) REFERENCES notes(id) ON DELETE CASCADE --> Hedef not silinirse bağlantı da silinir
             )
         """)
         self.conn.commit() # Değişiklikleri kaydet
@@ -79,13 +79,23 @@ class DatabaseManager:
             # Bağlantı zaten varsa (PRIMARY KEY kısıtlaması nedeniyle)
             return False # Başarısız olduğunu belirt
 
+    # note_count metodu, veritabanındaki seçili kategorinin toplam not sayısını döndürür.
+    def note_count(self,category):
+        cursor = self.conn.cursor() # Veritabanı imlecini al
+        if category == "All Notes": # Tüm notlar seçildiyse
+            cursor.execute("SELECT COUNT(*) FROM notes") # Tüm notların sayısını sorgula
+        else:
+            cursor.execute("SELECT COUNT(*) FROM notes WHERE category = ?", (category,)) # Belirtilen kategoriye sahip not sayısını sorgula
+        result = cursor.fetchone() # İlk sonucu al
+        return result[0] if result else 0 # Sonuç varsa sayıyı, yoksa 0 döndür
+
     # get_note_links metodu, belirli bir notla bağlantılı tüm notların ID'lerini döndürür.
     # note_id: Bağlantıları sorgulanacak notun ID'si.
     def get_note_links(self, note_id):
         cursor = self.conn.cursor() # Veritabanı imlecini al
         cursor.execute("""
             SELECT target_note_id FROM note_links WHERE source_note_id = ?
-            UNION # Hem kaynak hem de hedef olarak bağlantılı notları al
+            UNION --> Hem kaynak hem de hedef olarak bağlantılı notları al
             SELECT source_note_id FROM note_links WHERE target_note_id = ?
         """, (note_id, note_id)) # Sorguyu çalıştır
         return [row[0] for row in cursor.fetchall()] # Sonuçları liste olarak döndür

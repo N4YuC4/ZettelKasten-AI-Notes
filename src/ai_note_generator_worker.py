@@ -8,7 +8,7 @@ from PyQt5.QtCore import QObject, pyqtSignal # PyQt sinyal ve nesne sistemi içi
 from gemini_api_client import GeminiApiClient # Gemini API ile etkileşim için
 import note_manager # Not yönetimi işlevleri için (kaydetme, başlık sanitizasyonu)
 import database_manager # Veritabanı işlemleri için
-from main import log_debug # Hata ayıklama loglama fonksiyonu için
+from logger import log_debug # Hata ayıklama loglama fonksiyonu için
 
 # AiNoteGeneratorWorker sınıfı, AI not oluşturma işlemini ayrı bir iş parçacığında yürütür.
 # QObject'ten türetilmiştir, böylece sinyal/slot mekanizmasını kullanabilir.

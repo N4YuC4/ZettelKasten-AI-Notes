@@ -10,7 +10,7 @@ from dotenv import load_dotenv # .env dosyasından ortam değişkenlerini yükle
 import os # Ortam değişkenlerine erişim için
 import json # JSON verilerini işlemek için
 from database_manager import DatabaseManager # Veritabanı yöneticisi (şu an doğrudan kullanılmıyor ama bağımlılık olabilir)
-from main import log_debug # Hata ayıklama loglama fonksiyonu için
+from logger import log_debug # Hata ayıklama loglama fonksiyonu için
 
 # GeminiApiClient sınıfı, Gemini API ile iletişim kurar ve not oluşturma isteklerini yönetir.
 class GeminiApiClient:

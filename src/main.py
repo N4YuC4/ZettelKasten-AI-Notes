@@ -8,7 +8,7 @@
 import sys # Sistemle ilgili işlevler için (örn. uygulama çıkışı)
 import os # Dosya sistemi işlemleri için (örn. dosya yolu birleştirme)
 from dotenv import set_key # .env dosyasındaki ortam değişkenlerini ayarlamak için
-import datetime # Zaman damgaları için
+from logger import *
 import markdown # Markdown metnini HTML'e dönüştürmek için
 
 # PyQt5 GUI bileşenleri için gerekli modüller
@@ -29,13 +29,6 @@ from ai_note_generator_worker import AiNoteGeneratorWorker # Yapay zeka ile not 
 # Dosya seçimi için Tkinter kütüphanesi (PyQt5 ile entegre değil, ayrı bir pencere açar)
 import tkinter as tk
 from tkinter import filedialog
-
-# Hata ayıklama mesajlarını konsola ve bir log dosyasına yazan yardımcı fonksiyon
-def log_debug(msg):
-    print(msg) # Mesajı konsola yazdır
-    # logs/debug.log dosyasına zaman damgası ile birlikte mesajı ekle
-    with open("logs/debug.log", "a", encoding="utf-8") as f:
-        f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
 
 # NoteSelectionDialog sınıfı, kullanıcının mevcut notlar arasından bir not seçmesini sağlayan bir iletişim kutusu.
 # Bu, özellikle notları birbirine bağlarken kullanılır.
@@ -144,6 +137,9 @@ class ZettelkastenApp(QMainWindow):
         # Butonlar için yatay düzenleyici
         self.button_layout = QHBoxLayout()
         self.main_layout.addLayout(self.button_layout) # Ana düzenleyiciye ekle
+
+        self.note_count_label = QLabel(f"{self.current_note_category} not sayısı: {self.db_manager.note_count(self.current_note_category)}") # Kategori etiketi
+        self.button_layout.addWidget(self.note_count_label) # Buton düzenleyiciye ekle
 
         # Kategori seçim kutusu (ComboBox)
         self.category_combo_box = QComboBox()
@@ -559,6 +555,7 @@ class ZettelkastenApp(QMainWindow):
         self.category_combo_box.currentIndexChanged.connect(self.load_notes) # Sinyali tekrar bağla
 
         print(f"DEBUG: Selected category: {selected_category}")
+        self.note_count_label.setText(f"{selected_category} not sayısı: {self.db_manager.note_count(selected_category)}")
         
         # Notları filtreleyerek listeye ekle
         for note_id, display_title, category_path in all_notes_metadata:
@@ -715,15 +712,9 @@ class ZettelkastenApp(QMainWindow):
 
 # Uygulama başlangıç noktası
 if __name__ == '__main__':
-    import datetime
-    # Uygulama başlangıcında debug mesajı yazmak için yardımcı fonksiyon
-    def log_debug_startup(msg):
-        print(msg)
-        with open("logs/debug.log", "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
-    log_debug_startup("DEBUG: Uygulama başlatıldı ve debug.log dosyası test edildi.")
+    log_debug("DEBUG: Uygulama başlatıldı ve debug.log dosyası test edildi.")
+
     app = QApplication(sys.argv) # QApplication nesnesini oluştur
-    
     # Stil dosyasını yükle (varsa)
     stylesheet_path = os.path.join(os.path.dirname(__file__), 'style.qss')
     if os.path.exists(stylesheet_path):

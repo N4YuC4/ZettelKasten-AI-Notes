@@ -6,7 +6,7 @@
 
 import re # Düzenli ifadeler için
 import uuid # Benzersiz ID'ler oluşturmak için
-from main import log_debug # Hata ayıklama loglama fonksiyonu için
+from logger import log_debug # Hata ayıklama loglama fonksiyonu için
 
 # generate_unique_id fonksiyonu, yeni notlar için benzersiz bir ID oluşturur.
 def generate_unique_id():
@@ -22,18 +22,17 @@ def get_sanitized_title(content):
     # 1. Markdown başlık sözdizimini (örn. #, ##, vb.) satırın başından kaldır
     sanitized_title = re.sub(r'^#+\s*', '', first_line)
 
-    # 2. Parantez, köşeli parantez ve süslü parantez içindeki içeriği kaldır
-    # Not: Bu regex, iç içe geçmiş parantezleri tam olarak ele almayabilir.
-    sanitized_title = re.sub(r'\(.*?)\[.*?]\(.*?)]', '', sanitized_title)
-
-    # 3. Diğer yaygın Markdown formatlama karakterlerini ve başlıklar için geçersiz karakterleri kaldır
-    # Bu regex şunları kaldıracaktır:
-    # - Kalın/İtalik (**metin**, *metin*, __metin__, _metin_)
-    # - Satır içi kod (`kod`)
-    # - Üstü çizili (~~metin~~)
-    # - Bağlantılar ve resimler (![alt](url) veya [metin](url))
-    # - Başlıklarla çakışabilecek diğer özel karakterler
-    sanitized_title = re.sub(r'(\$\*\*|__|\*|_|`|~|!\[.*?]\s*\[.*?]|\]|\s*\[.*?]\s*\[.*?]|\]|\s*[<>:"/\\|?*])', '', sanitized_title)
+    # Remove bold/italic markers
+    sanitized_title = re.sub(r'(\*\*|__|\*|_)', '', sanitized_title)
+    # Remove inline code markers
+    sanitized_title = re.sub(r'`', '', sanitized_title)
+    # Remove strikethrough markers
+    sanitized_title = re.sub(r'~~', '', sanitized_title)
+    # Remove image/link syntax (e.g., ![alt](url) or [text](url))
+    sanitized_title = re.sub(r'!\\[.*?]\(.*?\\]\)', '', sanitized_title)
+    sanitized_title = re.sub(r'\[.*?]\[.*?]', '', sanitized_title)
+    # Remove remaining special characters that might be part of markdown or problematic in titles
+    sanitized_title = re.sub(r'[<>:"/\\|?*]', '', sanitized_title)
     
     # Temizleme işleminden sonra oluşabilecek baştaki/sondaki boşlukları kaldır
     sanitized_title = sanitized_title.strip()
@@ -52,7 +51,7 @@ def save_note(db_manager, note_id, note_content, category_path=""):
         sanitized_title = "Untitled Note" # Varsayılan başlık ata
 
     # Bu başlığa sahip mevcut bir not var mı kontrol et
-    existing_note_id = db_manager.get_note_id_by_title(sanitized_title)
+    existing_note_id = db_manager.get_note_id_by_title(sanitized_title) # Existing note ID by title
 
     if existing_note_id: # Mevcut bir not bulunursa
         log_debug(f"DEBUG: Found existing note with sanitized title '{sanitized_title}' and ID '{existing_note_id}'. Updating instead of creating new.")
@@ -88,7 +87,7 @@ def delete_note(db_manager, note_id):
 def rename_note(db_manager, note_id, new_title, category_path=""):
     sanitized_new_title = get_sanitized_title(new_title) # Yeni başlığı temizle
     if not sanitized_new_title:
-        return False, "New title cannot be empty or result in an empty sanitized title." # Temizlenmiş başlık boşsa hata döndür
+        return False, "New title cannot be empty or result in an empty sanitized title."
 
     note_data = db_manager.get_note(note_id) # Notun mevcut verilerini al
     if note_data:
@@ -98,7 +97,7 @@ def rename_note(db_manager, note_id, new_title, category_path=""):
         log_debug(f"Note with ID {note_id} renamed to {sanitized_new_title}.")
         return True, sanitized_new_title # Başarılı olduğunu ve yeni başlığı döndür
     else:
-        return False, "Note not found." # Not bulunamazsa hata döndür
+        return False, "Note not found."
 
 # load_all_notes_metadata fonksiyonu, tüm notların meta verilerini ve tüm kategorileri yükler.
 # db_manager: Veritabanı yöneticisi nesnesi.
