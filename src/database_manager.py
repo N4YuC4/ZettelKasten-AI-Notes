@@ -34,6 +34,17 @@ class DatabaseManager:
         """)
         self.conn.commit() # Değişiklikleri kaydet
 
+    def get_setting(self, key):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+
+    def set_setting(self, key, value):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        self.conn.commit()
+
     # create_notes_table metodu, not bilgilerini saklamak için bir tablo oluşturur.
     def create_notes_table(self):
         cursor = self.conn.cursor() # Veritabanı imlecini al

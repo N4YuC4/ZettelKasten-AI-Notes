@@ -128,6 +128,22 @@ class ZettelkastenApp(QMainWindow):
         self.init_ui() # Kullanıcı arayüzünü başlat
         self.load_notes() # Notları yükle
 
+        # Load and apply theme from settings
+        saved_theme = self.db_manager.get_setting("UI_THEME")
+        if saved_theme:
+            self.apply_theme(saved_theme)
+        else:
+            self.apply_theme("Light") # Default theme
+
+    def apply_theme(self, theme_name):
+        stylesheet_path = os.path.join(os.path.dirname(__file__), f'{theme_name.lower()}_theme.qss')
+        if os.path.exists(stylesheet_path):
+            with open(stylesheet_path, "r") as f:
+                QApplication.instance().setStyleSheet(f.read())
+            self.db_manager.set_setting("UI_THEME", theme_name)
+        else:
+            QMessageBox.warning(self, "Theme Error", f"Theme file not found: {stylesheet_path}")
+
     # init_ui metodu, ana pencerenin kullanıcı arayüzünü oluşturur.
     def init_ui(self):
         self.central_widget = QWidget() # Ana pencerenin merkezi widget'ı
@@ -234,6 +250,16 @@ class ZettelkastenApp(QMainWindow):
     def create_menu_bar(self):
         menubar = self.menuBar() # Menü çubuğunu al
         settings_menu = menubar.addMenu("Settings") # "Ayarlar" menüsünü ekle
+
+        # Tema menüsü
+        theme_menu = menubar.addMenu("Theme")
+        light_theme_action = QAction("Light Theme", self)
+        light_theme_action.triggered.connect(lambda: self.apply_theme("Light"))
+        theme_menu.addAction(light_theme_action)
+
+        dark_theme_action = QAction("Dark Theme", self)
+        dark_theme_action.triggered.connect(lambda: self.apply_theme("Dark"))
+        theme_menu.addAction(dark_theme_action)
 
         # Gemini API Anahtarı giriş eylemi
         gemini_api_key_action = QAction("Enter Gemini API Key", self)
@@ -381,8 +407,7 @@ class ZettelkastenApp(QMainWindow):
                 self.db_manager, 
                 note_id_to_rename, 
                 new_title, 
-                self.note_id_to_category.get(note_id_to_rename, "") # Notun kategorisini al
-            )
+                self.note_id_to_category.get(note_id_to_rename, "")) # Notun kategorisini al
 
             if success: # Yeniden adlandırma başarılıysa
                 if self.current_note_id == note_id_to_rename: # Eğer yeniden adlandırılan not açık olan notsa

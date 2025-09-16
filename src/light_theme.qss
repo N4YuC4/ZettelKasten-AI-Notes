@@ -1,0 +1,105 @@
+/* Modern Light Theme */
+
+QMainWindow {
+    background-color: #f5f5f5; /* Soft off-white background */
+    color: #333333;
+    font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+}
+
+QWidget {
+    background-color: #f5f5f5;
+    color: #333333;
+}
+
+QTextEdit,
+QListWidget,
+QLineEdit,
+QComboBox {
+    background-color: #ffffff;
+    color: #333333;
+    border: 1px solid #e0e0e0; /* Lighter border */
+    border-radius: 5px; /* Rounded corners */
+    padding: 8px;
+    selection-background-color: #a8d8ff; /* Modern selection color */
+    selection-color: #333333;
+}
+
+QTextEdit:focus,
+QLineEdit:focus,
+QComboBox:focus {
+    border: 1px solid #0078d7; /* Accent color on focus */
+}
+
+QPushButton {
+    background-color: #e0e0e0; /* Light grey button background */
+    border: 1px solid #cccccc;
+    border-radius: 4px;
+    padding: 8px 12px;
+    color: #333333;
+    font-weight: normal;
+}
+
+QPushButton:hover {
+    background-color: #d0d0d0; /* Slightly darker on hover */
+    border: 1px solid #b0b0b0;
+}
+
+QPushButton:pressed {
+    background-color: #c0c0c0; /* Even darker when pressed */
+    border: 1px solid #a0a0a0;
+}
+
+QComboBox::drop-down {
+    border: 0px; /* Remove dropdown border */
+}
+
+QComboBox::down-arrow {
+    image: url(down_arrow_light.png); /* Custom arrow icon */
+    width: 12px;
+    height: 12px;
+}
+
+QLabel {
+    color: #333333;
+}
+
+QMenuBar {
+    background-color: #e0e0e0;
+    color: #333333;
+    border-bottom: 1px solid #cccccc;
+}
+
+QMenuBar::item {
+    background-color: transparent;
+    color: #333333;
+    padding: 5px 10px;
+}
+
+QMenuBar::item:selected {
+    background-color: #d0d0d0;
+}
+
+QMenu {
+    background-color: #ffffff;
+    color: #333333;
+    border: 1px solid #e0e0e0;
+    border-radius: 5px;
+}
+
+QMenu::item {
+    padding: 8px 20px;
+}
+
+QMenu::item:selected {
+    background-color: #f0f0f0;
+    color: #0078d7;
+}
+
+QSplitter::handle {
+    background-color: #cccccc;
+}
+
+QSplitter::handle:hover {
+    background-color: #a0a0a0;
+}
