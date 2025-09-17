@@ -170,7 +170,7 @@ class DatabaseManager:
         except sqlite3.Error as e:
             print(f"Database error during note deletion: {e}") # Hata mesajını yazdır
             return False # Başarısız olduğunu belirt
-    
+
     # delete_category metodu, belirli bir kategoriyi ve bu kategoriye ait tüm notları siler.
     # category_name: Silinecek kategorinin adı.
     def delete_category(self, category_name):
@@ -263,6 +263,12 @@ class DatabaseManager:
         cursor = self.conn.cursor() # Veritabanı imlecini al
         cursor.execute("SELECT title, id FROM notes") # Başlık ve ID'leri sorgula
         return {title: note_id for title, note_id in cursor.fetchall()} # Sözlük olarak döndür
+
+    # get_all_note_links metodu, tüm not bağlantılarını (source_note_id, target_note_id) çiftleri olarak döndürür.
+    def get_all_note_links(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT source_note_id, target_note_id FROM note_links")
+        return cursor.fetchall()
 
     # close_connection metodu, veritabanı bağlantısını kapatır.
     def close_connection(self):

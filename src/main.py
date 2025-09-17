@@ -25,6 +25,7 @@ import database_manager # Veritabanı işlemleri için
 import note_manager # Notların kaydedilmesi, yüklenmesi, yeniden adlandırılması ve silinmesi gibi not yönetimi işlevleri için
 import pdf_processor # PDF dosyalarından metin çıkarmak için
 from ai_note_generator_worker import AiNoteGeneratorWorker # Yapay zeka ile not oluşturma işlemini ayrı bir iş parçacığında yürütmek için
+from mind_map_widget import MindMapWidget # Zihin haritası widget'ı için
 
 # Dosya seçimi için Tkinter kütüphanesi (PyQt5 ile entegre değil, ayrı bir pencere açar)
 import tkinter as tk
@@ -91,7 +92,7 @@ class NoteSelectionDialog(QDialog):
 
         # Tüm notların meta verilerini yükle
         all_notes_metadata, _ = note_manager.load_all_notes_metadata(self.db_manager)
-        
+
         # Her not için
         for note_id, title, _ in all_notes_metadata:
             if note_id == self.current_note_id: # Mevcut notu listede gösterme (kendisiyle bağlantı kurmayı engelle)
@@ -125,8 +126,12 @@ class ZettelkastenApp(QMainWindow):
         # Not ID'lerini kategorilere eşleyen sözlük
         self.note_id_to_category = {}
 
+        self.mind_map_widget = MindMapWidget(self.db_manager)
+        self.mind_map_widget.note_selected.connect(self.open_note_from_mind_map)
+
         self.init_ui() # Kullanıcı arayüzünü başlat
         self.load_notes() # Notları yükle
+        self._update_mind_map() # Zihin haritasını başlangıçta yükle
 
         self.settings = QSettings("Zettelkasten", "AI Notes") # Uygulama ayarlarını başlat
 
@@ -175,13 +180,13 @@ class ZettelkastenApp(QMainWindow):
         self.category_combo_box = QComboBox()
         self.category_combo_box.addItem("All Notes") # Varsayılan olarak "Tüm Notlar" seçeneğini ekle
         # Seçim değiştiğinde load_notes metodunu çağır
-        self.category_combo_box.currentIndexChanged.connect(self.load_notes) 
+        self.category_combo_box.currentIndexChanged.connect(self.load_notes)
         self.button_layout.addWidget(self.category_combo_box) # Buton düzenleyiciye ekle
 
         style = QApplication.instance().style() # Uygulamanın stilini al (ikonlar için)
 
         # Yeni Kategori Butonu
-        self.new_category_button = QPushButton(style.standardIcon(QStyle.SP_DirOpenIcon), "New Category") 
+        self.new_category_button = QPushButton(style.standardIcon(QStyle.SP_DirOpenIcon), "New Category")
         self.new_category_button.clicked.connect(self.create_new_category) # Tıklandığında yeni kategori oluştur
         self.button_layout.addWidget(self.new_category_button) # Buton düzenleyiciye ekle
 
@@ -191,7 +196,7 @@ class ZettelkastenApp(QMainWindow):
         self.button_layout.addWidget(self.delete_category_button) # Buton düzenleyiciye ekle
 
         # Yeni Not Butonu
-        self.new_button = QPushButton(style.standardIcon(QStyle.SP_FileIcon), "New Note") 
+        self.new_button = QPushButton(style.standardIcon(QStyle.SP_FileIcon), "New Note")
         self.new_button.clicked.connect(self.new_note) # Tıklandığında yeni not oluştur
         self.button_layout.addWidget(self.new_button) # Buton düzenleyiciye ekle
 
@@ -201,7 +206,7 @@ class ZettelkastenApp(QMainWindow):
         self.button_layout.addWidget(self.save_button) # Buton düzenleyiciye ekle
 
         # Notu Yeniden Adlandır Butonu
-        self.rename_button = QPushButton(style.standardIcon(QStyle.SP_DialogResetButton), "Rename Note") 
+        self.rename_button = QPushButton(style.standardIcon(QStyle.SP_DialogResetButton), "Rename Note")
         self.rename_button.clicked.connect(self.rename_note) # Tıklandığında notu yeniden adlandır
         self.button_layout.addWidget(self.rename_button) # Buton düzenleyiciye ekle
 
@@ -216,7 +221,7 @@ class ZettelkastenApp(QMainWindow):
         self.button_layout.addWidget(self.generate_notes_button) # Buton düzenleyiciye ekle
 
         # Notu Bağla Butonu
-        self.link_note_button = QPushButton(style.standardIcon(QStyle.SP_DialogYesButton), "Link Note") 
+        self.link_note_button = QPushButton(style.standardIcon(QStyle.SP_DialogYesButton), "Link Note")
         self.link_note_button.clicked.connect(self.link_note_action) # Tıklandığında notu bağla
         self.button_layout.addWidget(self.link_note_button) # Buton düzenleyiciye ekle
 
@@ -255,6 +260,10 @@ class ZettelkastenApp(QMainWindow):
         # Bağlam menüsü istendiğinde _show_linked_note_context_menu metodunu çağır
         self.linked_notes_list_widget.customContextMenuRequested.connect(self._show_linked_note_context_menu)
         self.editor_preview_splitter.addWidget(self.linked_notes_list_widget) # Ayırıcıya ekle
+
+        # Zihin Haritası Widget'ı
+        self.editor_preview_splitter.insertWidget(0, self.mind_map_widget) # Ayırıcıya ekle
+        self.editor_preview_splitter.setSizes([250, 200, 200, 150]) # Editör, önizleme, bağlantılı notlar ve zihin haritası için başlangıç boyutlarını ayarla
 
         self.display_linked_notes() # Bağlantılı notları göster
 
@@ -382,9 +391,9 @@ class ZettelkastenApp(QMainWindow):
 
         # Notu kaydet veya güncelle
         note_id, display_title = note_manager.save_note(
-            self.db_manager, 
-            self.current_note_id, 
-            note_content, 
+            self.db_manager,
+            self.current_note_id,
+            note_content,
             category_to_save
         )
 
@@ -393,6 +402,7 @@ class ZettelkastenApp(QMainWindow):
             self.current_note_category = category_to_save # Mevcut not kategorisini güncelle
             self.setWindowTitle(f"Zettelkasten AI Notes - {display_title}") # Pencere başlığını güncelle
             self.load_notes(category_to_select=category_to_save) # Notları yeniden yükle ve kategoriyi seç
+            self._update_mind_map() # Not kaydedildikten sonra zihin haritasını güncelle
         else:
             QMessageBox.critical(self, "Error", "Failed to save note.") # Kaydetme başarısız olursa hata mesajı göster
 
@@ -412,22 +422,23 @@ class ZettelkastenApp(QMainWindow):
             return
 
         # Kullanıcıdan yeni başlığı girmesini iste (mevcut başlık önceden doldurulmuş olarak)
-        new_title, ok = QInputDialog.getText(self, "Rename Note", "Enter new title:", 
+        new_title, ok = QInputDialog.getText(self, "Rename Note", "Enter new title:",
                                             text=selected_display_title)
 
         if ok and new_title: # Kullanıcı Tamam'a basar ve yeni başlık boş değilse
             # Notu yeniden adlandır
             success, new_display_title = note_manager.rename_note(
-                self.db_manager, 
-                note_id_to_rename, 
-                new_title, 
+                self.db_manager,
+                note_id_to_rename,
+                new_title,
                 self.note_id_to_category.get(note_id_to_rename, "")) # Notun kategorisini al
 
             if success: # Yeniden adlandırma başarılıysa
                 if self.current_note_id == note_id_to_rename: # Eğer yeniden adlandırılan not açık olan notsa
                     self.setWindowTitle(f"Zettelkasten AI Notes - {new_display_title}") # Pencere başlığını güncelle
                 # Notları yeniden yükle ve ilgili kategoriyi seç
-                self.load_notes(category_to_select=self.note_id_to_category.get(note_id_to_rename, "")) 
+                self.load_notes(category_to_select=self.note_id_to_category.get(note_id_to_rename, ""))
+                self._update_mind_map() # Not yeniden adlandırıldıktan sonra zihin haritasını güncelle
             else:
                 QMessageBox.critical(self, "Error", f"Failed to rename note: {new_display_title}") # Hata mesajı göster
         elif ok and not new_title: # Kullanıcı Tamam'a basar ama yeni başlık boşsa
@@ -449,7 +460,7 @@ class ZettelkastenApp(QMainWindow):
             return
 
         # Kullanıcıya silme işlemini onaylaması için soru sor
-        reply = QMessageBox.question(self, 'Delete Note', 
+        reply = QMessageBox.question(self, 'Delete Note',
                                      f"Are you sure you want to delete '{selected_display_title}'?\nThis action cannot be undone.",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
@@ -458,8 +469,9 @@ class ZettelkastenApp(QMainWindow):
             if success:
                 self.new_note() # Yeni bir boş not oluştur (düzenleyiciyi temizle)
                 # Notları yeniden yükle (mevcut kategori seçili olarak)
-                self.load_notes(category_to_select=self.category_combo_box.currentText() if self.category_combo_box.currentText() != "All Notes" else "") 
+                self.load_notes(category_to_select=self.category_combo_box.currentText() if self.category_combo_box.currentText() != "All Notes" else "")
                 self.display_linked_notes() # Bağlantılı notlar listesini yenile
+                self._update_mind_map() # Not silindikten sonra zihin haritasını güncelle
             else:
                 QMessageBox.critical(self, "Error", "Failed to delete note.") # Hata mesajı göster
 
@@ -490,7 +502,8 @@ class ZettelkastenApp(QMainWindow):
             if success:
                 self.new_note() # Yeni bir boş not oluştur (düzenleyiciyi temizle)
                 # Notları yeniden yükle (mevcut kategori seçili olarak)
-                self.load_notes(category_to_select=self.category_combo_box.currentText() if self.category_combo_box.currentText() != "All Notes" else "")  
+                self.load_notes(category_to_select=self.category_combo_box.currentText() if self.category_combo_box.currentText() != "All Notes" else "")
+                self._update_mind_map() # Kategori silindikten sonra zihin haritasını güncelle
             else:
                 QMessageBox.critical(self, "Error", "Failed to delete category.") # Hata mesajı göster
 
@@ -548,7 +561,7 @@ class ZettelkastenApp(QMainWindow):
     # load_notes metodu, veritabanından notları ve kategorileri yükler ve not listesini günceller.
     # index: Seçilecek kategori ComboBox indeksini belirtir.
     # category_to_select: Seçilecek kategori adını belirtir.
-    def load_notes(self, index=None, category_to_select=None): 
+    def load_notes(self, index=None, category_to_select=None):
         print(f"DEBUG: load_notes called with index: {index}, category_to_select: {category_to_select}")
 
         self.notes_list_widget.clear() # Not listesini temizle
@@ -567,7 +580,7 @@ class ZettelkastenApp(QMainWindow):
 
         # Tüm notların meta verilerini ve tüm kategorileri yükle
         all_notes_metadata, all_categories = note_manager.load_all_notes_metadata(self.db_manager)
-        print(f"DEBUG: all_categories: {all_categories}") 
+        print(f"DEBUG: all_categories: {all_categories}")
 
         # Kategorileri ComboBox'a ekle
         for category in sorted(list(all_categories)):
@@ -579,7 +592,7 @@ class ZettelkastenApp(QMainWindow):
             selected_category = self.category_combo_box.itemText(index)
         elif category_to_select:
             idx = self.category_combo_box.findText(category_to_select) # Kategori adını bul
-            print(f"DEBUG: findText result for {category_to_select}: {idx}") 
+            print(f"DEBUG: findText result for {category_to_select}: {idx}")
             if idx != -1:
                 self.category_combo_box.setCurrentIndex(idx)
                 selected_category = category_to_select
@@ -595,7 +608,7 @@ class ZettelkastenApp(QMainWindow):
 
         print(f"DEBUG: Selected category: {selected_category}")
         self.note_count_label.setText(f"{selected_category} not sayısı: {self.db_manager.note_count(selected_category)}")
-        
+
         # Notları filtreleyerek listeye ekle
         for note_id, display_title, category_path in all_notes_metadata:
             if category_path:
@@ -605,6 +618,7 @@ class ZettelkastenApp(QMainWindow):
             if selected_category == "All Notes" or category_path == selected_category:
                 self.notes_list_widget.addItem(display_title) # Notu listeye ekle
                 self.displayed_title_to_note_id[display_title] = note_id # Başlık-ID eşlemesini sakla
+        self._update_mind_map() # Notlar yüklendikten sonra zihin haritasını güncelle
 
     # open_selected_note metodu, not listesinden seçilen bir notu düzenleyiciye yükler.
     # item: Seçilen QListWidgetItem nesnesi.
@@ -622,6 +636,7 @@ class ZettelkastenApp(QMainWindow):
         self.current_note_category = note_category # Mevcut not kategorisini güncelle
         log_debug(f"DEBUG: open_selected_note - current_note_id atandı: {self.current_note_id}")
         self.display_linked_notes() # Bağlantılı notları her durumda göster
+        self._update_mind_map() # Seçilen not değiştiğinde zihin haritasını güncelle
 
         content = note_manager.get_note_content(self.db_manager, self.current_note_id) # Not içeriğini veritabanından al
         if content is not None: # İçerik varsa
@@ -644,7 +659,7 @@ class ZettelkastenApp(QMainWindow):
     def handle_ai_generation_finished(self, generated_notes):
         if self.loading_dialog: # Yükleme iletişim kutusu açıksa kapat
             self.loading_dialog.close()
-            self.loading_dialog = None 
+            self.loading_dialog = None
 
         if generated_notes: # Notlar oluşturulduysa
             log_debug("DEBUG: handle_ai_generation_finished: Yapay zeka notları çalışan tarafından işlendi. Kullanıcı arayüzü yenileniyor.")
@@ -652,6 +667,7 @@ class ZettelkastenApp(QMainWindow):
             # Notları yeniden yükle ve mevcut kategoriyi seç
             self.load_notes(category_to_select=self.current_note_category)
             self.display_linked_notes() # Oluşturma ve bağlama sonrası bağlantılı notları yenile
+            self._update_mind_map() # AI not oluşturma bittiğinde zihin haritasını güncelle
         else:
             QMessageBox.warning(self, "AI Note Generation", "Yapay zeka tarafından not oluşturulmadı.")
 
@@ -660,7 +676,7 @@ class ZettelkastenApp(QMainWindow):
     def handle_ai_generation_error(self, message):
         if self.loading_dialog: # Yükleme iletişim kutusu açıksa kapat
             self.loading_dialog.close()
-            self.loading_dialog = None 
+            self.loading_dialog = None
         QMessageBox.critical(self, "AI Note Generation Error", f"An error occurred during AI note generation: {message}")
 
     # open_selected_note_from_link metodu, bağlantılı notlar listesinden bir not seçildiğinde çağrılır.
@@ -675,7 +691,7 @@ class ZettelkastenApp(QMainWindow):
                 if note_id == selected_note_id:
                     display_title = title
                     break
-            
+
             if display_title:
                 # Ana not listesindeki öğeyi simüle ederek aç
                 # Bu, open_selected_note metodunu tetikleyecek ve içeriği yükleyecektir.
@@ -735,7 +751,7 @@ class ZettelkastenApp(QMainWindow):
             return
 
         # Kullanıcıya bağlantıyı kaldırma işlemini onaylaması için soru sor
-        reply = QMessageBox.question(self, 'Unlink Note', 
+        reply = QMessageBox.question(self, 'Unlink Note',
                                      f"Are you sure you want to unlink '{linked_note_title_to_unlink}' from the current note?",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
@@ -745,8 +761,50 @@ class ZettelkastenApp(QMainWindow):
             if success:
                 QMessageBox.information(self, "Unlink Note", f"Successfully unlinked '{linked_note_title_to_unlink}'.")
                 self.display_linked_notes() # Bağlantılı notlar listesini yenile
+                self._update_mind_map() # Zihin haritasını güncelle
             else:
                 QMessageBox.critical(self, "Error", f"Failed to unlink note: {linked_note_title_to_unlink}.")
+
+    # open_note_from_mind_map metodu, zihin haritasından bir not seçildiğinde çağrılır.
+    def open_note_from_mind_map(self, note_id):
+        # Not ID'sine karşılık gelen başlığı bul
+        display_title = None
+        for title, nid in self.displayed_title_to_note_id.items():
+            if nid == note_id:
+                display_title = title
+                break
+
+        if display_title:
+            # Ana not listesindeki öğeyi simüle ederek aç
+            items = self.notes_list_widget.findItems(display_title, Qt.MatchExactly)
+            if items:
+                self.notes_list_widget.setCurrentItem(items[0]) # Öğeyi seçili hale getir
+                self.open_selected_note(items[0]) # Notu aç
+        else:
+            QMessageBox.warning(self, "Open Note", "Could not find the selected note in the main list.")
+
+    # _update_mind_map metodu, zihin haritasını tüm notlar ve bağlantılarla günceller.
+    def _update_mind_map(self):
+        log_debug("DEBUG: _update_mind_map called.")
+        all_notes_metadata, _ = note_manager.load_all_notes_metadata(self.db_manager)
+        all_links = self.db_manager.get_all_note_links()
+
+        selected_category = self.category_combo_box.currentText()
+
+        filtered_notes_metadata = []
+        filtered_note_ids = set()
+        for note_id, title, category_path in all_notes_metadata:
+            if selected_category == "All Notes" or category_path == selected_category:
+                filtered_notes_metadata.append((note_id, title, category_path))
+                filtered_note_ids.add(note_id)
+
+        filtered_links = []
+        for source_id, target_id in all_links:
+            if source_id in filtered_note_ids and target_id in filtered_note_ids:
+                filtered_links.append((source_id, target_id))
+
+        log_debug(f"DEBUG: _update_mind_map - Number of notes: {len(filtered_notes_metadata)}, Number of links: {len(filtered_links)}, Current note ID: {self.current_note_id}")
+        self.mind_map_widget.update_map(filtered_notes_metadata, filtered_links, self.current_note_id)
 
 
 # Uygulama başlangıç noktası
@@ -762,4 +820,4 @@ if __name__ == '__main__':
 
     ex = ZettelkastenApp() # Ana uygulama penceresini oluştur
     ex.show() # Pencereyi göster
-    sys.exit(app.exec_()) # Uygulamayı çalıştır ve çıkış kodunu döndür
+    sys.exit(app.exec_())
