@@ -1,9 +1,14 @@
 import datetime
+import os
 
-# Hata ayıklama mesajlarını konsola ve bir log dosyasına yazan yardımcı fonksiyon
+# Hata ayiklama mesajlarini konsola ve bir log dosyasiyaz an yardimci fonksiyon
 def log_debug(msg):
-    print(msg) # Mesajı konsola yazdır
-    # logs/debug.log dosyasına zaman damgası ile birlikte mesajı ekle
-    with open("logs/debug.log", "a", encoding="utf-8") as f:
-        f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
+    print(msg) # Mesaji konsola yazdir
+    
+    # Log dizininin var oldugundan emin ol
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
 
+    # logs/debug.log dosyasiina zaman damgasi ile birlikte mesaji ekle
+    with open(os.path.join(log_dir, "debug.log"), "a", encoding="utf-8") as f:
+        f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
