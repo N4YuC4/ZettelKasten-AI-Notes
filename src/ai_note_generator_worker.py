@@ -9,6 +9,8 @@ from gemini_api_client import GeminiApiClient # Gemini API ile etkileşim için
 import note_manager # Not yönetimi işlevleri için (kaydetme, başlık sanitizasyonu)
 import database_manager # Veritabanı işlemleri için
 from logger import log_debug # Hata ayıklama loglama fonksiyonu için
+from uuid import uuid4 # Benzersiz ID oluşturmak için
+from datetime import datetime # Zaman damgaları için
 
 # AiNoteGeneratorWorker sınıfı, AI not oluşturma işlemini ayrı bir iş parçacığında yürütür.
 # QObject'ten türetilmiştir, böylece sinyal/slot mekanizmasını kullanabilir.
@@ -39,45 +41,62 @@ class AiNoteGeneratorWorker(QObject):
                 # Kapsamlı bir arama için mevcut notları ve ID'lerini yükle
                 title_to_id = db_manager_worker.get_all_note_titles_and_ids()
                 log_debug(f"DEBUG: Initial title_to_id: {title_to_id}")
-                note_ids = [] # Yeni kaydedilen notların ID'lerini saklamak için liste
-                notes_saved_count = 0 # Kaydedilen not sayacı
 
-                # Aşama 1: Tüm notları kaydet ve title_to_id sözlüğünü yeni kaydedilen notlarla güncelle
+                notes_to_insert = []
+                links_to_insert = []
+                new_note_mappings = {}
+
+                # Aşama 1: Not verilerini ve geçici kimlikleri hazırla
                 for note_data in generated_notes:
-                    title = note_data.get('title', 'Untitled Note') # Not başlığını al
-                    content = note_data.get('content', '') # Not içeriğini al
-                    category = note_data.get('general_title', 'AI Generated') # Not kategorisini al
-                    if title and content: # Başlık ve içerik boş değilse
-                        # Notu kaydet ve yeni notun ID'si ile başlığını al
-                        new_note_id, saved_title = note_manager.save_note(db_manager_worker, None, f"# {title}\n\n{content}", category)
-                        title_to_id[saved_title] = new_note_id # Yeni notu title_to_id sözlüğüne ekle/güncelle
-                        note_ids.append(new_note_id) # Not ID'sini listeye ekle
-                        notes_saved_count += 1 # Sayacı artır
-                        log_debug(f"DEBUG: Saved note '{saved_title}' with ID '{new_note_id}'")
-                log_debug(f"DEBUG: Final title_to_id after new notes: {title_to_id}")
+                    temp_id = str(uuid4())
+                    title = note_data.get('title', 'Untitled Note')
+                    sanitized_title = note_manager.get_sanitized_title(f"# {title}")
+                    new_note_mappings[sanitized_title] = temp_id
+                    note_data['_temp_id'] = temp_id
 
-                # Aşama 2: Tüm notlar kaydedildikten sonra bağlantıları ekle
-                for i, note_data in enumerate(generated_notes):
-                    source_id = note_ids[i] # Kaynak notun ID'si
-                    connections = note_data.get('connections', []) # Bağlantıları al
+                # Hem mevcut hem de yeni not başlıklarını birleştir
+                title_to_id.update(new_note_mappings)
+
+                now = datetime.now().isoformat()
+                # Aşama 2: Notları ve bağlantıları eklemek için listeleri oluştur
+                for note_data in generated_notes:
+                    source_id = note_data['_temp_id']
+                    title = note_data.get('title', 'Untitled Note')
+                    content = note_data.get('content', '')
+                    category = note_data.get('general_title', 'AI Generated')
+                    
+                    full_content = f"# {title}\n\n{content}"
+                    sanitized_title = note_manager.get_sanitized_title(full_content)
+
+                    notes_to_insert.append(
+                        (source_id, sanitized_title, full_content, category, now, now)
+                    )
+
+                    connections = note_data.get('connections', [])
                     for target_title_raw in connections:
-                        # Hedef başlığı sanitize et (temizle)
                         sanitized_target_title = note_manager.get_sanitized_title(target_title_raw)
-                        log_debug(f"DEBUG: Looking for target_title {repr(sanitized_target_title)} (len: {len(sanitized_target_title)}, raw: {repr(target_title_raw)}) in title_to_id.")
-                        target_id = title_to_id.get(sanitized_target_title) # Hedef notun ID'sini bul
-                        if target_id: # Hedef not bulunduysa
-                            log_debug(f"DEBUG: Found target_id '{target_id}' for '{sanitized_target_title}'. Inserting link from '{source_id}' to '{target_id}'.")
-                            log_debug(f"DEBUG: Attempting to insert link: Source ID: {source_id}, Target ID: {target_id}, Raw Target Title: {target_title_raw}")
-                            db_manager_worker.insert_note_link(source_id, target_id) # Bağlantıyı veritabanına ekle
+                        target_id = title_to_id.get(sanitized_target_title)
+                        if target_id:
+                            links_to_insert.append((source_id, target_id))
                         else:
                             log_debug(f"DEBUG: Could not find target_id for '{sanitized_target_title}' (raw: '{target_title_raw}'). Link not inserted.")
-                self.finished.emit(generated_notes) # Başarıyla tamamlandığını bildir ve notları yay
+
+                # Aşama 3: Toplu veritabanı işlemleri
+                if notes_to_insert:
+                    db_manager_worker.bulk_insert_notes(notes_to_insert)
+                    log_debug(f"DEBUG: Bulk inserted {len(notes_to_insert)} notes.")
+
+                if links_to_insert:
+                    db_manager_worker.bulk_insert_links(links_to_insert)
+                    log_debug(f"DEBUG: Bulk inserted {len(links_to_insert)} links.")
+
+                self.finished.emit(generated_notes)
             else:
-                self.error.emit("AI did not generate any notes from the PDF content.") # Not oluşturulmadıysa hata yay
+                self.error.emit("AI did not generate any notes from the PDF content.")
         except ValueError as ve:
-            self.error.emit(f"API Key Error: {str(ve)}") # API anahtarı hatası yay
+            self.error.emit(f"API Key Error: {str(ve)}")
         except Exception as e:
-            self.error.emit(f"An error occurred during AI note generation: {e}") # Diğer hataları yay
+            self.error.emit(f"An error occurred during AI note generation: {e}")
         finally:
-            # İşçinin veritabanı bağlantısını kapat
-            db_manager_worker.close_connection()
+            if db_manager_worker:
+                db_manager_worker.close_connection()

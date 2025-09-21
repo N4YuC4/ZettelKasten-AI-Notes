@@ -270,7 +270,32 @@ class DatabaseManager:
         cursor.execute("SELECT source_note_id, target_note_id FROM note_links")
         return cursor.fetchall()
 
+    def bulk_insert_notes(self, notes_data):
+        cursor = self.conn.cursor()
+        try:
+            cursor.executemany("""
+                INSERT INTO notes (id, title, content, category, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, notes_data)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            self.conn.rollback()
+            raise e
+
+    def bulk_insert_links(self, links_data):
+        cursor = self.conn.cursor()
+        try:
+            cursor.executemany("""
+                INSERT OR IGNORE INTO note_links (source_note_id, target_note_id)
+                VALUES (?, ?)
+            """, links_data)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            self.conn.rollback()
+            raise e
+
     # close_connection metodu, veritabanı bağlantısını kapatır.
     def close_connection(self):
         if self.conn:
             self.conn.close() # Bağlantıyı kapat
+            self.conn = None
