@@ -4,7 +4,7 @@
 ![PyQt5](https://img.shields.io/badge/PyQt5-5.x-green.svg)
 ![Lisans](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-Zettelkasten yöntemini kullanarak verimli bilgi yönetimi için `PyQt5` ile oluşturulmuş bir masaüstü uygulamasıdır. Kullanıcıların notları oluşturmasına, düzenlemesine ve bağlamasına olanak tanır, zengin içerik için `Markdown`'ı destekler ve gerçek zamanlı bir önizleme sunar. Tüm verileri yerel bir `SQLite` veritabanında saklar. Önemli bir özelliği, PDF belgelerinden Zettelkasten tarzı notlar oluşturmak için `Google Gemini AI`'ı kullanabilmesi ve aralarında otomatik olarak ilgili bağlantılar önermesidir.
+Zettelkasten yöntemini kullanarak verimli bilgi yönetimi için `PyQt5` ile oluşturulmuş bir masaüstü uygulamasıdır. Kullanıcıların notları oluşturmasına, düzenlemesine ve bağlamasına olanak tanır, zengin içerik için `Markdown`'ı destekler ve gerçek zamanlı bir önizleme sunar. Tüm verileri yerel bir `SQLite` veritabanında saklar. Önemli bir özelliği, PDF belgelerinden Zettelkasten tarzı notlar oluşturmak için `Google Gemini AI`'ı kullanabilmesi ve aralarında otomatik olarak ilgili bağlantılar önermesidir. Bu proje, Pupilica tarafından düzenlenen Yapay Zeka Hackathonu için geliştirilmiştir.
 
 ## Key Features (Temel Özellikler)
 
@@ -129,7 +129,7 @@ Zettelkasten-AI-Notes/
 ```
 
 ## Contributing (Katkıda Bulunma)
-Katkılar memnuniyetle karşılanır! İyileştirmeler, hata düzeltmeleri veya yeni özellikler için önerileriniz varsa, lütfen çekinmeyin:
+:
 1.  Depoyu `fork`'layın.
 2.  Yeni bir `branch` oluşturun (`git checkout -b feature/NewFeature`).
 3.  Değişikliklerinizi yapın.

@@ -455,26 +455,33 @@ class ZettelkastenApp(QMainWindow):
 
     # delete_note metodu, seçili notu veritabanından siler.
     def delete_note(self):
-        selected_items = self.notes_list_widget.selectedItems() # Seçili öğeleri al
-        if not selected_items: # Hiçbir öğe seçili değilse uyarı ver
+        if not self.current_note_id: # Check if a note is currently open
             QMessageBox.information(self, "Delete Note", "Please select a note to delete.")
             return
 
-        selected_display_title = selected_items[0].text() # Seçili notun görünen başlığını al
-        # Görünen başlıktan not ID'sini al
-        note_id_to_delete = self.displayed_title_to_note_id.get(selected_display_title)
+        # Get the title of the current note for the confirmation message
+        note_to_delete_title = ""
+        for title, note_id in self.displayed_title_to_note_id.items():
+            if note_id == self.current_note_id:
+                note_to_delete_title = title
+                break
+        
+        if not note_to_delete_title:
+            # Fallback if title not found (should not happen in normal operation)
+            note_data = self.db_manager.get_note(self.current_note_id)
+            if note_data:
+                note_to_delete_title = note_data[1]
+            else:
+                note_to_delete_title = "the selected note"
 
-        if not note_id_to_delete: # Not ID'si bulunamazsa hata mesajı göster
-            QMessageBox.critical(self, "Error", f"Could not find note ID for note: {selected_display_title}")
-            return
 
         # Kullanıcıya silme işlemini onaylaması için soru sor
         reply = QMessageBox.question(self, 'Delete Note', 
-                                     f"Are you sure you want to delete '{selected_display_title}'?\nThis action cannot be undone.",
+                                     f"Are you sure you want to delete '{note_to_delete_title}'?\nThis action cannot be undone.",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes: # Kullanıcı onaylarsa
-            success = note_manager.delete_note(self.db_manager, note_id_to_delete) # Notu sil
+            success = note_manager.delete_note(self.db_manager, self.current_note_id) # Notu sil
             if success:
                 self.new_note() # Yeni bir boş not oluştur (düzenleyiciyi temizle)
                 # Notları yeniden yükle (mevcut kategori seçili olarak)

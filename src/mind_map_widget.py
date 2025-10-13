@@ -25,6 +25,7 @@ class MindMapWidget(QWidget):
         self.notes = {}  
         self.links = []  # Bağlantıları (kaynak_not_id, hedef_not_id) demetleri listesi olarak saklar.
         self.current_note_id = None # Şu anda seçili/odaklanmış notun kimliği.
+        self.levels = {} # Her notun grafik içindeki seviyesini saklar.
         
         # --- Düğüm Stili ve Yerleşim Parametreleri ---
         self.node_radius = 10 # Düğümler için temel yarıçap, boyut hesaplamalarında kullanılır.
@@ -171,7 +172,6 @@ class MindMapWidget(QWidget):
         # 4. BFS/DFS kullanarak seviyeleri ve yatay sırayı ata.
         # 'levels' her not için atanan seviyeyi saklar.
         # 'level_nodes' notları atanan seviyelerine göre gruplandırır.
-        self.levels = {} 
         level_nodes = {} 
         
         # Kök düğümleri seviye 0'a sahip kuyruğa ekle.
