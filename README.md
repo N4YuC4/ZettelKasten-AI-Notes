@@ -27,7 +27,7 @@ AI note generation is managed by `ai_note_generator_worker.py`, which runs in a 
 The mind map visualization is managed by `mind_map_widget.py`, which uses a `force-directed graph layout` to display the notes and their connections.
 
 ## Screenshots
-*Coming soon...*
+![](./screenshot.png)
 
 ## Installation
 
