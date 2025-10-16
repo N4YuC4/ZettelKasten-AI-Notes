@@ -1,34 +1,33 @@
 # gemini_api_client.py
 #
-# Bu dosya, Google Gemini API ile etkileşim kurarak Zettelkasten tarzı notlar
-# oluşturan GeminiApiClient sınıfını içerir. Verilen metin içeriğinden anahtar
-# kavramları, argümanları ve içgörüleri çıkarır ve bunları yapılandırılmış
-# JSON formatında notlara dönüştürür.
+# This file contains the GeminiApiClient class, which interacts with the Google Gemini API
+# to generate Zettelkasten-style notes. It extracts key concepts, arguments, and insights
+# from the given text content and transforms them into structured JSON format notes.
 
-import google.generativeai as genai # Google Gemini API kütüphanesi
-from dotenv import load_dotenv # .env dosyasından ortam değişkenlerini yüklemek için
-import os # Ortam değişkenlerine erişim için
-import json # JSON verilerini işlemek için
-from database_manager import DatabaseManager # Veritabanı yöneticisi (şu an doğrudan kullanılmıyor ama bağımlılık olabilir)
-from logger import log_debug # Hata ayıklama loglama fonksiyonu için
+import google.generativeai as genai # Google Gemini API library
+from dotenv import load_dotenv # To load environment variables from a .env file
+import os # For accessing environment variables
+import json # To process JSON data
+from database_manager import DatabaseManager # Database manager (not directly used at the moment but could be a dependency)
+from logger import log_debug # For debug logging function
 
-# GeminiApiClient sınıfı, Gemini API ile iletişim kurar ve not oluşturma isteklerini yönetir.
+# The GeminiApiClient class communicates with the Gemini API and manages note generation requests.
 class GeminiApiClient:
-    # __init__ metodu, API istemcisini başlatır, API anahtarını yükler ve Gemini modelini yapılandırır.
+    # The __init__ method initializes the API client, loads the API key, and configures the Gemini model.
     def __init__(self):
-        load_dotenv() # .env dosyasındaki ortam değişkenlerini yükle
-        api_key = os.getenv("GEMINI_API_KEY") # Ortam değişkenlerinden API anahtarını al
+        load_dotenv() # Load environment variables from the .env file
+        api_key = os.getenv("GEMINI_API_KEY") # Get the API key from environment variables
 
-        if not api_key: # API anahtarı bulunamazsa hata fırlat
+        if not api_key: # If the API key is not found, raise an error
             raise ValueError("Gemini API Key not found. Please set the GEMINI_API_KEY environment variable in a .env file or via the application's menu (Settings -> Enter Gemini API Key).")
 
-        genai.configure(api_key=api_key) # Gemini API'yi anahtar ile yapılandır
-        self.model = genai.GenerativeModel('gemini-2.5-flash') # Kullanılacak Gemini modelini belirt
+        genai.configure(api_key=api_key) # Configure the Gemini API with the key
+        self.model = genai.GenerativeModel('gemini-1.5-flash') # Specify the Gemini model to be used
 
-    # generate_zettelkasten_notes metodu, verilen metin içeriğinden Zettelkasten tarzı notlar oluşturur.
-    # text_content (str): Notların oluşturulacağı metin içeriği.
-    # Dönüş: Oluşturulan notların bir listesi. Her not, 'general_title', 'title', 'content' ve 'connections'
-    # anahtarlarına sahip bir sözlüktür.
+    # The generate_zettelkasten_notes method generates Zettelkasten-style notes from the given text content.
+    # text_content (str): The text content from which the notes will be generated.
+    # Returns: A list of generated notes. Each note is a dictionary with 'general_title', 'title', 'content', and 'connections'
+    # keys.
     def generate_zettelkasten_notes(self, text_content):
         """
         Generates Zettelkasten-style notes from the given text content using the Gemini API.
@@ -38,7 +37,7 @@ class GeminiApiClient:
             list: A list of generated notes, where each note is a dictionary
                   with 'general_title', 'title', 'content' and 'connections' keys.
         """
-        # Gemini API'ye gönderilecek istem (prompt) metni
+        # The prompt text to be sent to the Gemini API
         prompt = f"""You are an AI assistant specialized in generating Zettelkasten-style notes. all notes should be concise, focused on a single idea, and formatted in markdown. Make sure markdown formatting is perfectly correct.     
 The notes language should be what documents language is.
 From the following text, extract key concepts, arguments, and insights.
@@ -69,33 +68,33 @@ Text to process:
 {text_content}
 """
         try:
-            response = self.model.generate_content(prompt) # Gemini API'ye istek gönder
-            notes_json_str = response.text # API yanıtını metin olarak al
+            response = self.model.generate_content(prompt) # Send a request to the Gemini API
+            notes_json_str = response.text # Get the API response as text
             log_debug(f"DEBUG: Raw Gemini API response (full, len={len(notes_json_str)}): {notes_json_str}")
             
             try:
-                notes = json.loads(notes_json_str) # JSON metnini ayrıştır
+                notes = json.loads(notes_json_str) # Parse the JSON text
             except json.JSONDecodeError:
-                # Doğrudan ayrıştırma başarısız olursa, Markdown kod bloğu sınırlayıcılarını kaldırmayı dene
+                # If direct parsing fails, try to remove the Markdown code block delimiters
                 if notes_json_str.startswith('```json') and notes_json_str.endswith('```'):
-                    notes_json_str = notes_json_str[len('```json\n'):-len('\n```')] # Sınırlayıcıları kaldır
-                    notes = json.loads(notes_json_str) # Tekrar ayrıştırmayı dene
+                    notes_json_str = notes_json_str[len('```json\n'):-len('\n```')] # Remove the delimiters
+                    notes = json.loads(notes_json_str) # Try parsing again
                 else:
-                    raise # Sınırlayıcıları kaldırmak işe yaramazsa hatayı tekrar fırlat
+                    raise # If removing the delimiters doesn't work, re-raise the error
 
-            return notes # Ayrıştırılan notları döndür
+            return notes # Return the parsed notes
         except json.JSONDecodeError as jde:
-            log_debug(f"Error parsing JSON from Gemini API: {jde}") # JSON ayrıştırma hatasını logla
-            return [] # Boş liste döndür
+            log_debug(f"Error parsing JSON from Gemini API: {jde}") # Log the JSON parsing error
+            return [] # Return an empty list
         except Exception as e:
-            log_debug(f"Error generating notes with Gemini API: {e}") # Diğer hataları logla
-            return [] # Boş liste döndür
+            log_debug(f"Error generating notes with Gemini API: {e}") # Log other errors
+            return [] # Return an empty list
 
-# Bu blok, dosya doğrudan çalıştırıldığında örnek kullanım sağlar (test amaçlı).
+# This block provides an example usage when the file is run directly (for testing purposes).
 if __name__ == '__main__':
-    # Örnek kullanım (test amaçlı)
-    # GEMINI_API_KEY ortam değişkenini ayarlamanız gerekmektedir.
-    # Örneğin: export GEMINI_API_KEY="YOUR_API_KEY"
+    # Example usage (for testing purposes)
+    # You need to set the GEMINI_API_KEY environment variable.
+    # For example: export GEMINI_API_KEY="YOUR_API_KEY"
     # client = GeminiApiClient()
     # dummy_text = "The quick brown fox jumps over the lazy dog. This is a test sentence."
     # generated_notes = client.generate_zettelkasten_notes(dummy_text)

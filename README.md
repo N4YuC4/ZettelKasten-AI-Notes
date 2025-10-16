@@ -1,144 +1,144 @@
 # Zettelkasten AI Notes
 
-![Python Sürümü](https://img.shields.io/badge/Python-3.x-blue.svg)
+![Python Version](https://img.shields.io/badge/Python-3.x-blue.svg)
 ![PyQt5](https://img.shields.io/badge/PyQt5-5.x-green.svg)
-![Lisans](https://img.shields.io/badge/License-MIT-yellow.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-Zettelkasten yöntemini kullanarak verimli bilgi yönetimi için `PyQt5` ile oluşturulmuş bir masaüstü uygulamasıdır. Kullanıcıların notları oluşturmasına, düzenlemesine ve bağlamasına olanak tanır, zengin içerik için `Markdown`'ı destekler ve gerçek zamanlı bir önizleme sunar. Tüm verileri yerel bir `SQLite` veritabanında saklar. Önemli bir özelliği, PDF belgelerinden Zettelkasten tarzı notlar oluşturmak için `Google Gemini AI`'ı kullanabilmesi ve aralarında otomatik olarak ilgili bağlantılar önermesidir. Bu proje, Pupilica tarafından düzenlenen Yapay Zeka Hackathonu için geliştirilmiştir.
+A desktop application built with `PyQt5` for efficient knowledge management using the Zettelkasten method. It allows users to create, edit, and link notes, supports `Markdown` for rich content, and offers a real-time preview. It stores all data in a local `SQLite` database. A key feature is its ability to use `Google Gemini AI` to generate Zettelkasten-style notes from PDF documents and automatically suggest relevant links between them. This project was developed for the Artificial Intelligence Hackathon organized by Pupilica.
 
-## Key Features (Temel Özellikler)
+## Key Features
 
-*   **Intuitive User Interface:** Sorunsuz not yönetimi için temiz ve duyarlı bir `GUI`.
-*   **Note Creation and Management:** Bireysel notları kolayca oluşturun, kaydedin, yeniden adlandırın ve silin.
-*   **Markdown Support with Live Preview:** Notlarınızı `Markdown`'da yazın ve oluşturulan çıktıyı gerçek zamanlı olarak görün.
-*   **Categorization:** Daha iyi filtreleme ve gezinme için notları özel kategorilere ayırın.
-*   **AI-Powered Note Generation from PDF:** PDF belgelerinden metin çıkarın ve önerilen ilgili bağlantılarla otomatik olarak Zettelkasten tarzı notlar oluşturmak için `Google Gemini AI`'ı kullanın.
-*   **Mind Map Visualization:** Notlarınızı ve bağlantılarını etkileşimli bir zihin haritası olarak görüntüleyin. Bu, fikirleriniz arasındaki ilişkileri görselleştirmenize ve bilgi tabanınızda daha etkili bir şekilde gezinmenize yardımcı olur.
-*   **Smart Note Linking:** Bilginizin zengin, birbirine bağlı bir grafiğini oluşturmak için notlar arasında açık bağlantılar oluşturun.
-*   **Theming:** Uygulamanın görünümünü özelleştirmek için aydınlık ve karanlık temalar arasında seçim yapın.
-*   **SQLite Database:** Tüm notlarınız ve ilişkileri için sağlam ve güvenilir yerel depolama.
+*   **Intuitive User Interface:** A clean and responsive `GUI` for seamless note management.
+*   **Note Creation and Management:** Easily create, save, rename, and delete individual notes.
+*   **Markdown Support with Live Preview:** Write your notes in `Markdown` and see the rendered output in real-time.
+*   **Categorization:** Organize notes into custom categories for better filtering and navigation.
+*   **AI-Powered Note Generation from PDF:** Extract text from PDF documents and use `Google Gemini AI` to automatically generate Zettelkasten-style notes with suggested relevant links.
+*   **Mind Map Visualization:** View your notes and their connections as an interactive mind map. This helps you visualize the relationships between your ideas and navigate your knowledge base more effectively.
+*   **Smart Note Linking:** Create explicit links between notes to build a rich, interconnected graph of your knowledge.
+*   **Theming:** Choose between light and dark themes to customize the application's appearance.
+*   **SQLite Database:** Robust and reliable local storage for all your notes and their relationships.
 
-## How it Works (Nasıl Çalışır?)
+## How it Works
 
-`main.py` dosyası, `PyQt5` uygulamasını başlatır ve ana pencereyi (`ZettelkastenApp`) kurar. `database_manager.py` aracılığıyla `SQLite` veritabanına bağlanır. Bir kullanıcı uygulamayla etkileşimde bulunduğunda (ör. düzenleyiciye yazar, `save`'e tıklar, bir kategori seçer), `ZettelkastenApp` olayları yönetir, `UI`'ı günceller ve veritabanındaki notlar üzerinde `CRUD` (Create, Read, Update, Delete) işlemlerini gerçekleştirmek için `database_manager.py`'deki uygun yöntemleri çağırır. Bir notun içeriğinin ilk satırı otomatik olarak başlığı olarak kullanılır.
+The `main.py` file initializes the `PyQt5` application and sets up the main window (`ZettelkastenApp`). It connects to the `SQLite` database via `database_manager.py`. When a user interacts with the application (e.g., types in the editor, clicks `save`, selects a category), `ZettelkastenApp` handles the events, updates the `UI`, and calls the appropriate methods in `database_manager.py` to perform `CRUD` (Create, Read, Update, Delete) operations on the notes in the database. The first line of a note's content is automatically used as its title.
 
-Yapay zeka notu oluşturma, `UI`'ı dondurmamak için ayrı bir `thread`'de çalışan `ai_note_generator_worker.py` tarafından yönetilir. Bir PDF'den çıkarılan metni `gemini_api_client.py` aracılığıyla `Google Gemini API`'ye gönderir ve ardından notları oluşturmak ve bağlamak için yanıtı işler.
+AI note generation is managed by `ai_note_generator_worker.py`, which runs in a separate `thread` to avoid freezing the `UI`. It sends the text extracted from a PDF to the `Google Gemini API` via `gemini_api_client.py` and then processes the response to create and link the notes.
 
-Zihin haritası görselleştirmesi, notları ve bağlantılarını görüntülemek için bir `force-directed graph layout` kullanan `mind_map_widget.py` tarafından yönetilir.
+The mind map visualization is managed by `mind_map_widget.py`, which uses a `force-directed graph layout` to display the notes and their connections.
 
-## Ekran Görüntüleri
-*Yakında...*
+## Screenshots
+*Coming soon...*
 
-## Installation (Kurulum)
+## Installation
 
-### Önkoşullar
-*   Python 3.8 veya üstü
-*   `pip` (Python paket yükleyici)
+### Prerequisites
+*   Python 3.8 or higher
+*   `pip` (Python package installer)
 
-### Adımlar
+### Steps
 
-1.  **Depoyu klonlayın:**
+1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/kullanici-adiniz/Zettelkasten-AI-Notes.git
+    git clone https://github.com/your-username/Zettelkasten-AI-Notes.git
     cd Zettelkasten-AI-Notes
     ```
 
-2.  **Sanal bir ortam (`virtual environment`) oluşturun ve etkinleştirin (önerilir):**
+2.  **Create and activate a virtual environment (recommended):**
     ```bash
     python -m venv venv
-    # Windows'ta:
+    # On Windows:
     .\venv\Scripts\activate
-    # macOS/Linux'ta:
+    # On macOS/Linux:
     source venv/bin/activate
     ```
 
-3.  **Bağımlılıkları yükleyin:**
+3.  **Install the dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
 
-4.  **Google Gemini API Anahtarınızı ayarlayın:**
-    Uygulama, yapay zeka notları oluşturmak için bir `Google Gemini API Key` gerektirir.
-    *   API anahtarınızı [Google AI Studio](https://aistudio.google.com/app/apikey) adresinden edinin.
-    *   Projenin kök dizininde `.env` adında bir dosya oluşturun (ör. `Zettelkasten-AI-Notes/.env`).
-    *   API anahtarınızı bu dosyaya aşağıdaki formatta ekleyin:
+4.  **Set up your Google Gemini API Key:**
+    The application requires a `Google Gemini API Key` to generate AI notes.
+    *   Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+    *   Create a file named `.env` in the root directory of the project (e.g., `Zettelkasten-AI-Notes/.env`).
+    *   Add your API key to this file in the following format:
         ```
-        GEMINI_API_KEY="API_ANAHTARINIZI_BURAYA_GIRIN"
+        GEMINI_API_KEY="YOUR_API_KEY_HERE"
         ```
-    *   Alternatif olarak, API anahtarını doğrudan uygulama içinden `Settings -> Enter Gemini API Key` menü seçeneği aracılığıyla girebilirsiniz.
+    *   Alternatively, you can enter the API key directly within the application via the `Settings -> Enter Gemini API Key` menu option.
 
-## Usage (Kullanım)
+## Usage
 
-1.  **Uygulamayı başlatın:**
+1.  **Start the application:**
     ```bash
     python src/main.py
     ```
 
-2.  **Temel Not Yönetimi:**
-    *   **New Note:** Düzenleyiciyi temizlemek ve yeni bir nota başlamak için "New Note" düğmesine tıklayın.
-    *   **Save Note:** `Markdown` içeriğinizi düzenleyiciye yazın. İlk satır otomatik olarak notun başlığı olacaktır. Veritabanına kaydetmek için "Save Note" düğmesine tıklayın.
-    *   **Rename Note:** Listeden bir not seçin, ardından başlığını değiştirmek için "Rename Note" düğmesine tıklayın.
-    *   **Delete Note:** Bir not seçin ve kaldırmak için "Delete Note" düğmesine tıklayın.
+2.  **Basic Note Management:**
+    *   **New Note:** Click the "New Note" button to clear the editor and start a new note.
+    *   **Save Note:** Write your `Markdown` content in the editor. The first line will automatically become the note's title. Click the "Save Note" button to save it to the database.
+    *   **Rename Note:** Select a note from the list, then click the "Rename Note" button to change its title.
+    *   **Delete Note:** Select a note and click the "Delete Note" button to remove it.
 
-3.  **Kategori Yönetimi:**
-    *   **Create New Category:** "New Category"ye tıklayın, bir ad girin ve o kategori içinde yeni bir not oluşturulacaktır.
-    *   **Filter by Category:** Belirli bir kategoriye veya "All Notes"a ait notları görüntülemek için kategori açılır menüsünü kullanın.
-    *   **Delete Category:** Açılır menüden bir kategori seçin ve "Delete Category" düğmesine tıklayın. Bu, kategoriyi ve onunla ilişkili tüm notları silecektir.
+3.  **Category Management:**
+    *   **Create New Category:** Click "New Category", enter a name, and a new note will be created within that category.
+    *   **Filter by Category:** Use the category dropdown menu to view notes belonging to a specific category or "All Notes".
+    *   **Delete Category:** Select a category from the dropdown and click the "Delete Category" button. This will delete the category and all notes associated with it.
 
 4.  **Markdown Preview:**
-    Sol düzenleyici bölmesinde yazdıkça, sağ bölme notunuzun canlı bir `Markdown` önizlemesini gösterecektir.
+    As you type in the left editor pane, the right pane will show a live `Markdown` preview of your note.
 
 5.  **AI Note Generation from PDF:**
-    *   "Generate AI Notes from PDF" düğmesine tıklayın.
-    *   Sisteminizden bir PDF dosyası seçin.
-    *   Uygulama, PDF'ten metni çıkaracak ve not oluşturma için `Gemini AI`'ye gönderecektir.
-    *   Oluşturulan notlar otomatik olarak kaydedilecek ve not listenize "AI Generated" kategorisi altında veya yapay zeka tarafından sağlanan genel bir başlık altında eklenecektir.
+    *   Click the "Generate AI Notes from PDF" button.
+    *   Select a PDF file from your system.
+    *   The application will extract the text from the PDF and send it to `Gemini AI` for note generation.
+    *   The generated notes will be automatically saved and added to your note list under the "AI Generated" category or a general title provided by the AI.
 
 6.  **Note Linking:**
-    *   **Link Notes:** Ana listeden bir not seçin. "Link Note" düğmesine tıklayın veya nota sağ tıklayıp "Link to..." seçeneğini seçin. Başka bir notu aramanıza ve seçmenize olanak tanıyan bir iletişim kutusu görünecektir.
-    *   **View Linked Notes:** Ana listede bir not seçildiğinde, bağlantılı notları "Linked Notes List" bölmesinde görünecektir.
-    *   **Open Linked Note:** Düzenleyicide açmak için "Linked Notes List"ndeki bağlantılı bir nota tıklayın.
-    *   **Unlink Note:** Bağlantıyı kaldırmak için "Linked Notes List"ndeki bir nota sağ tıklayın ve "Unlink Note" seçeneğini seçin.
+    *   **Link Notes:** Select a note from the main list. Click the "Link Note" button or right-click the note and select "Link to...". A dialog will appear allowing you to search for and select another note.
+    *   **View Linked Notes:** When a note is selected in the main list, its linked notes will appear in the "Linked Notes List" pane.
+    *   **Open Linked Note:** Click on a linked note in the "Linked Notes List" to open it in the editor.
+    *   **Unlink Note:** Right-click a note in the "Linked Notes List" and select "Unlink Note" to remove the link.
 
 7.  **Mind Map Visualization:**
-    *   Pencerenin altındaki zihin haritası, tüm notlarınızı `nodes` (düğümler) olarak ve bağlantılarını `connections` (bağlantılar) olarak görüntüler.
-    *   İlgili notu düzenleyicide açmak için zihin haritasındaki bir `node`'a tıklayın.
-    *   Görünümü `zoom in` ve `zoom out` yapmak için fare tekerleğini kullanın ve `pan` yapmak için sağ tıklayıp sürükleyin.
+    *   The mind map at the bottom of the window displays all your notes as `nodes` and their links as `connections`.
+    *   Click on a `node` in the mind map to open the corresponding note in the editor.
+    *   Use the mouse wheel to `zoom in` and `zoom out` of the view, and right-click and drag to `pan`.
 
 8.  **Theming:**
-    *   Uygulamanın görünümünü değiştirmek için "Theme" menüsüne gidin ve "Light Theme" veya "Dark Theme"ı seçin.
+    *   Go to the "Theme" menu and select "Light Theme" or "Dark Theme" to change the application's appearance.
 
-## Project Structure (Proje Yapısı)
+## Project Structure
 ```
 Zettelkasten-AI-Notes/
 ├── src/
-│   ├── ai_note_generator_worker.py # AI notu oluşturmayı ayrı bir thread'de yönetir
-│   ├── database_manager.py         # Tüm SQLite veritabanı işlemlerini yönetir
-│   ├── gemini_api_client.py        # Google Gemini API ile arayüz oluşturur
-│   ├── main.py                     # Ana uygulama giriş noktası ve GUI mantığı
-│   ├── note_manager.py             # Notla ilgili işlemleri yönetir (save, rename, delete, sanitize)
-│   ├── pdf_processor.py            # PDF dosyalarından metin içeriğini çıkarır
-│   ├── mind_map_widget.py          # Zihin haritası görselleştirme widget'ı
-│   ├── dark_theme.qss              # Karanlık tema için stil sayfası
-│   ├── light_theme.qss             # Aydınlık tema için stil sayfası
-│   └── logger.py                   # Hata ayıklama için basit bir logger
-├── .gitignore                      # Git yoksayma dosyası
-├── LICENSE                         # Proje lisansı
-├── README.md                       # Projeye genel bakış ve kurulum talimatları
-└── requirements.txt                # Python bağımlılıkları
+│   ├── ai_note_generator_worker.py # Manages AI note generation in a separate thread
+│   ├── database_manager.py         # Manages all SQLite database operations
+│   ├── gemini_api_client.py        # Interfaces with the Google Gemini API
+│   ├── main.py                     # Main application entry point and GUI logic
+│   ├── note_manager.py             # Manages note-related operations (save, rename, delete, sanitize)
+│   ├── pdf_processor.py            # Extracts text content from PDF files
+│   ├── mind_map_widget.py          # The mind map visualization widget
+│   ├── dark_theme.qss              # Stylesheet for the dark theme
+│   ├── light_theme.qss             # Stylesheet for the light theme
+│   └── logger.py                   # A simple logger for debugging
+├── .gitignore                      # Git ignore file
+├── LICENSE                         # Project license
+├── README.md                       # Project overview and setup instructions
+└── requirements.txt                # Python dependencies
 ```
 
-## Contributing (Katkıda Bulunma)
-:
-1.  Depoyu `fork`'layın.
-2.  Yeni bir `branch` oluşturun (`git checkout -b feature/NewFeature`).
-3.  Değişikliklerinizi yapın.
-4.  Değişikliklerinizi `commit`'leyin (`git commit -m 'Yeni bir özellik ekle'`).
-5.  `Branch`'e `push`'layın (`git push origin feature/NewFeature`).
-6.  Bir `Pull Request` açın.
+## Contributing
 
-## License (Lisans)
-Bu proje MIT Lisansı altında lisanslanmıştır - ayrıntılar için [LICENSE](LICENSE) dosyasına bakın.
+1.  `fork` the repository.
+2.  Create a new `branch` (`git checkout -b feature/NewFeature`).
+3.  Make your changes.
+4.  `commit` your changes (`git commit -m 'Add a new feature'`).
+5.  `push` to the `branch` (`git push origin feature/NewFeature`).
+6.  Open a `Pull Request`.
 
-## Contact (İletişim)
-Herhangi bir soru veya geri bildirim için lütfen GitHub deposunda bir `issue` açın.
+## License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Contact
+For any questions or feedback, please open an `issue` on the GitHub repository.

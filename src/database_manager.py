@@ -1,38 +1,38 @@
 # database_manager.py
 #
-# Bu dosya, uygulamanın SQLite veritabanı ile etkileşimini yöneten
-# DatabaseManager sınıfını içerir. Notların, kategorilerin ve not bağlantılarının
-# CRUD (Oluşturma, Okuma, Güncelleme, Silme) işlemlerini sağlar.
+# This file contains the DatabaseManager class, which manages the interaction
+# with the application's SQLite database. It provides CRUD (Create, Read, Update, Delete)
+# operations for notes, categories, and note links.
 
-import sqlite3 # SQLite veritabanı ile çalışmak için
-import os # Dosya sistemi işlemleri için
-from datetime import datetime # Zaman damgaları için
+import sqlite3 # To work with the SQLite database
+import os # For file system operations
+from datetime import datetime # For timestamps
 
-# Veritabanı dosyasının yolu. Uygulama kök dizinindeki 'db' klasöründe bulunur.
+# The path to the database file. It is located in the 'db' folder in the application's root directory.
 DATABASE_FILE = os.path.join("db", "notes.db")
 
-# DatabaseManager sınıfı, SQLite veritabanı bağlantısını ve işlemlerini yönetir.
+# The DatabaseManager class manages the SQLite database connection and operations.
 class DatabaseManager:
-    # __init__ metodu, veritabanı bağlantısını kurar ve gerekli tabloları oluşturur.
+    # The __init__ method establishes the database connection and creates the necessary tables.
     def __init__(self):
-        # 'db' klasörünün var olduğundan emin ol, yoksa oluştur
+        # Ensure the 'db' folder exists, otherwise create it
         os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True)
-        self.conn = sqlite3.connect(DATABASE_FILE) # Veritabanına bağlan
-        self.conn.execute("PRAGMA foreign_keys = ON") # Yabancı anahtar kısıtlamalarını etkinleştir
-        self.create_notes_table() # Notlar tablosunu oluştur
-        self.create_note_links_table() # Not bağlantıları tablosunu oluştur
-        self._create_settings_table() # Ayarlar tablosunu oluştur
+        self.conn = sqlite3.connect(DATABASE_FILE) # Connect to the database
+        self.conn.execute("PRAGMA foreign_keys = ON") # Enable foreign key constraints
+        self.create_notes_table() # Create the notes table
+        self.create_note_links_table() # Create the note links table
+        self._create_settings_table() # Create the settings table
 
-    # _create_settings_table metodu, uygulama ayarlarını saklamak için bir tablo oluşturur.
+    # The _create_settings_table method creates a table to store application settings.
     def _create_settings_table(self):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
+        cursor = self.conn.cursor() # Get the database cursor
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY, --> Ayar anahtarı (benzersiz)
-                value TEXT --> Ayar değeri
+                key TEXT PRIMARY KEY, -- > The setting key (unique)
+                value TEXT -- > The setting value
             )
         """)
-        self.conn.commit() # Değişiklikleri kaydet
+        self.conn.commit() # Save the changes
 
     def get_setting(self, key):
         cursor = self.conn.cursor()
@@ -45,226 +45,226 @@ class DatabaseManager:
         cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
         self.conn.commit()
 
-    # create_notes_table metodu, not bilgilerini saklamak için bir tablo oluşturur.
+    # The create_notes_table method creates a table to store note information.
     def create_notes_table(self):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
+        cursor = self.conn.cursor() # Get the database cursor
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS notes (
-                id TEXT PRIMARY KEY, --> Notun benzersiz ID'si
-                title TEXT NOT NULL, --> Notun başlığı (boş olamaz)
-                content TEXT, --> Notun içeriği
-                category TEXT DEFAULT '', --> Notun kategorisi (varsayılan boş)
-                created_at TEXT NOT NULL, --> Oluşturulma zamanı
-                updated_at TEXT NOT NULL --> Son güncelleme zamanı
+                id TEXT PRIMARY KEY, -- > The unique ID of the note
+                title TEXT NOT NULL, -- > The title of the note (cannot be empty)
+                content TEXT, -- > The content of the note
+                category TEXT DEFAULT '', -- > The category of the note (default empty)
+                created_at TEXT NOT NULL, -- > The creation time
+                updated_at TEXT NOT NULL -- > The last update time
             )
         """)
-        self.conn.commit() # Değişiklikleri kaydet
+        self.conn.commit() # Save the changes
 
-    # create_note_links_table metodu, notlar arasındaki bağlantıları saklamak için bir tablo oluşturur.
+    # The create_note_links_table method creates a table to store the links between notes.
     def create_note_links_table(self):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
+        cursor = self.conn.cursor() # Get the database cursor
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS note_links (
-                source_note_id TEXT NOT NULL, --> Kaynak notun ID'si
-                target_note_id TEXT NOT NULL, --> Hedef notun ID'si
-                PRIMARY KEY (source_note_id, target_note_id), --> İki ID'nin kombinasyonu benzersiz olmalı
-                FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE CASCADE, --> Kaynak not silinirse bağlantı da silinir
-                FOREIGN KEY (target_note_id) REFERENCES notes(id) ON DELETE CASCADE --> Hedef not silinirse bağlantı da silinir
+                source_note_id TEXT NOT NULL, -- > The ID of the source note
+                target_note_id TEXT NOT NULL, -- > The ID of the target note
+                PRIMARY KEY (source_note_id, target_note_id), -- > The combination of the two IDs must be unique
+                FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE CASCADE, -- > If the source note is deleted, the link is also deleted
+                FOREIGN KEY (target_note_id) REFERENCES notes(id) ON DELETE CASCADE -- > If the target note is deleted, the link is also deleted
             )
         """)
-        self.conn.commit() # Değişiklikleri kaydet
+        self.conn.commit() # Save the changes
 
-    # insert_note_link metodu, iki not arasında bir bağlantı ekler.
-    # source_note_id: Bağlantının başladığı notun ID'si.
-    # target_note_id: Bağlantının bittiği notun ID'si.
+    # The insert_note_link method adds a link between two notes.
+    # source_note_id: The ID of the note where the link starts.
+    # target_note_id: The ID of the note where the link ends.
     def insert_note_link(self, source_note_id, target_note_id):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
+        cursor = self.conn.cursor() # Get the database cursor
         try:
             cursor.execute("""
                 INSERT INTO note_links (source_note_id, target_note_id)
                 VALUES (?, ?)
-            """, (source_note_id, target_note_id)) # Bağlantıyı ekle
-            self.conn.commit() # Değişiklikleri kaydet
-            return True # Başarılı olduğunu belirt
+            """, (source_note_id, target_note_id)) # Add the link
+            self.conn.commit() # Save the changes
+            return True # Indicate success
         except sqlite3.IntegrityError:
-            # Bağlantı zaten varsa (PRIMARY KEY kısıtlaması nedeniyle)
-            return False # Başarısız olduğunu belirt
+            # If the link already exists (due to the PRIMARY KEY constraint)
+            return False # Indicate failure
 
-    # note_count metodu, veritabanındaki seçili kategorinin toplam not sayısını döndürür.
+    # The note_count method returns the total number of notes in the selected category in the database.
     def note_count(self,category):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
-        if category == "All Notes": # Tüm notlar seçildiyse
-            cursor.execute("SELECT COUNT(*) FROM notes") # Tüm notların sayısını sorgula
+        cursor = self.conn.cursor() # Get the database cursor
+        if category == "All Notes": # If all notes are selected
+            cursor.execute("SELECT COUNT(*) FROM notes") # Query the count of all notes
         else:
-            cursor.execute("SELECT COUNT(*) FROM notes WHERE category = ?", (category,)) # Belirtilen kategoriye sahip not sayısını sorgula
-        result = cursor.fetchone() # İlk sonucu al
-        return result[0] if result else 0 # Sonuç varsa sayıyı, yoksa 0 döndür
+            cursor.execute("SELECT COUNT(*) FROM notes WHERE category = ?", (category,)) # Query the number of notes with the specified category
+        result = cursor.fetchone() # Get the first result
+        return result[0] if result else 0 # Return the count if there is a result, otherwise 0
 
-    # get_note_links metodu, belirli bir notla bağlantılı tüm notların ID'lerini döndürür.
-    # note_id: Bağlantıları sorgulanacak notun ID'si.
+    # The get_note_links method returns the IDs of all notes linked to a specific note.
+    # note_id: The ID of the note whose links are to be queried.
     def get_note_links(self, note_id):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
+        cursor = self.conn.cursor() # Get the database cursor
         cursor.execute("""
             SELECT target_note_id FROM note_links WHERE source_note_id = ?
-            UNION --> Hem kaynak hem de hedef olarak bağlantılı notları al
+            UNION -- > Get notes linked as both source and target
             SELECT source_note_id FROM note_links WHERE target_note_id = ?
-        """, (note_id, note_id)) # Sorguyu çalıştır
-        return [row[0] for row in cursor.fetchall()] # Sonuçları liste olarak döndür
+        """, (note_id, note_id)) # Execute the query
+        return [row[0] for row in cursor.fetchall()] # Return the results as a list
 
-    # delete_note_link metodu, iki not arasındaki belirli bir bağlantıyı siler.
-    # source_note_id: Kaynak notun ID'si.
-    # target_note_id: Hedef notun ID'si.
+    # The delete_note_link method deletes a specific link between two notes.
+    # source_note_id: The ID of the source note.
+    # target_note_id: The ID of the target note.
     def delete_note_link(self, source_note_id, target_note_id):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
+        cursor = self.conn.cursor() # Get the database cursor
         cursor.execute("""
             DELETE FROM note_links WHERE source_note_id = ? AND target_note_id = ?
-        """, (source_note_id, target_note_id)) # Bağlantıyı sil
-        self.conn.commit() # Değişiklikleri kaydet
-        return cursor.rowcount > 0 # Bir bağlantı silindiyse True, aksi halde False döndür
+        """, (source_note_id, target_note_id)) # Delete the link
+        self.conn.commit() # Save the changes
+        return cursor.rowcount > 0 # Return True if a link was deleted, otherwise False
 
-    # get_note_id_by_title metodu, bir notun başlığına göre ID'sini döndürür.
-    # title: Aranacak notun başlığı.
+    # The get_note_id_by_title method returns the ID of a note based on its title.
+    # title: The title of the note to search for.
     def get_note_id_by_title(self, title):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
-        cursor.execute("SELECT id FROM notes WHERE title = ?", (title,)) # Başlığa göre ID'yi sorgula
-        result = cursor.fetchone() # İlk sonucu al
-        return result[0] if result else None # Sonuç varsa ID'yi, yoksa None döndür
+        cursor = self.conn.cursor() # Get the database cursor
+        cursor.execute("SELECT id FROM notes WHERE title = ?", (title,)) # Query the ID by title
+        result = cursor.fetchone() # Get the first result
+        return result[0] if result else None # Return the ID if there is a result, otherwise None
 
-    # insert_note metodu, veritabanına yeni bir not ekler.
-    # note_id: Notun benzersiz ID'si.
-    # title: Notun başlığı.
-    # content: Notun içeriği.
-    # category: Notun kategorisi (isteğe bağlı).
+    # The insert_note method adds a new note to the database.
+    # note_id: The unique ID of the note.
+    # title: The title of the note.
+    # content: The content of the note.
+    # category: The category of the note (optional).
     def insert_note(self, note_id, title, content, category=""):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
-        now = datetime.now().isoformat() # Mevcut zamanı ISO formatında al
+        cursor = self.conn.cursor() # Get the database cursor
+        now = datetime.now().isoformat() # Get the current time in ISO format
         cursor.execute("""
             INSERT INTO notes (id, title, content, category, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (note_id, title, content, category, now, now)) # Notu ekle
-        self.conn.commit() # Değişiklikleri kaydet
+        """, (note_id, title, content, category, now, now)) # Add the note
+        self.conn.commit() # Save the changes
 
-    # update_note metodu, mevcut bir notu günceller.
-    # note_id: Güncellenecek notun ID'si.
-    # title: Yeni başlık.
-    # content: Yeni içerik.
-    # category: Yeni kategori (isteğe bağlı).
+    # The update_note method updates an existing note.
+    # note_id: The ID of the note to be updated.
+    # title: The new title.
+    # content: The new content.
+    # category: The new category (optional).
     def update_note(self, note_id, title, content, category=""):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
-        now = datetime.now().isoformat() # Mevcut zamanı ISO formatında al
+        cursor = self.conn.cursor() # Get the database cursor
+        now = datetime.now().isoformat() # Get the current time in ISO format
         cursor.execute("""
             UPDATE notes
             SET title = ?, content = ?, category = ?, updated_at = ?
             WHERE id = ?
-        """, (title, content, category, now, note_id)) # Notu güncelle
-        self.conn.commit() # Değişiklikleri kaydet
+        """, (title, content, category, now, note_id)) # Update the note
+        self.conn.commit() # Save the changes
 
-    # delete_note metodu, belirli bir notu veritabanından siler.
-    # note_id: Silinecek notun ID'si.
+    # The delete_note method deletes a specific note from the database.
+    # note_id: The ID of the note to be deleted.
     def delete_note(self, note_id):
         try:
-            cursor = self.conn.cursor() # Veritabanı imlecini al
-            cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,)) # Notu sil
-            self.conn.commit() # Değişiklikleri kaydet
-            return True  # Başarılı olduğunu belirt
+            cursor = self.conn.cursor() # Get the database cursor
+            cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,)) # Delete the note
+            self.conn.commit() # Save the changes
+            return True  # Indicate success
         except sqlite3.Error as e:
-            print(f"Database error during note deletion: {e}") # Hata mesajını yazdır
-            return False # Başarısız olduğunu belirt
+            print(f"Database error during note deletion: {e}") # Print the error message
+            return False # Indicate failure
 
-    # delete_category metodu, belirli bir kategoriyi ve bu kategoriye ait tüm notları siler.
-    # category_name: Silinecek kategorinin adı.
+    # The delete_category method deletes a specific category and all notes belonging to it.
+    # category_name: The name of the category to be deleted.
     def delete_category(self, category_name):
         try:
-            cursor = self.conn.cursor() # Veritabanı imlecini al
-            cursor.execute("DELETE FROM notes WHERE category = ?", (category_name,)) # Kategoriye ait notları sil
-            self.conn.commit() # Değişiklikleri kaydet
-            return True  # Başarılı olduğunu belirt
+            cursor = self.conn.cursor() # Get the database cursor
+            cursor.execute("DELETE FROM notes WHERE category = ?", (category_name,)) # Delete the notes belonging to the category
+            self.conn.commit() # Save the changes
+            return True  # Indicate success
         except sqlite3.Error as e:
-            print(f"Database error during category deletion: {e}") # Hata mesajını yazdır
-            return False  # Başarısız olduğunu belirt
+            print(f"Database error during category deletion: {e}") # Print the error message
+            return False  # Indicate failure
 
-    # get_note metodu, belirli bir notun tüm verilerini (ID, başlık, içerik, kategori) döndürür.
-    # note_id: Alınacak notun ID'si.
+    # The get_note method returns all data (ID, title, content, category) of a specific note.
+    # note_id: The ID of the note to be retrieved.
     def get_note(self, note_id):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
-        cursor.execute("SELECT id, title, content, category FROM notes WHERE id = ?", (note_id,)) # Notu sorgula
-        note = cursor.fetchone() # İlk sonucu al
-        return note # Not verilerini döndür
+        cursor = self.conn.cursor() # Get the database cursor
+        cursor.execute("SELECT id, title, content, category FROM notes WHERE id = ?", (note_id,)) # Query the note
+        note = cursor.fetchone() # Get the first result
+        return note # Return the note data
 
-    # get_all_notes_metadata metodu, tüm notların meta verilerini (ID, başlık, kategori) ve
-    # tüm benzersiz kategori adlarını döndürür.
+    # The get_all_notes_metadata method returns the metadata (ID, title, category) of all notes and
+    # all unique category names.
     def get_all_notes_metadata(self):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
-        cursor.execute("SELECT id, title, category FROM notes") # Notların meta verilerini sorgula
-        notes_metadata = cursor.fetchall() # Tüm sonuçları al
-        all_categories = set() # Benzersiz kategorileri saklamak için küme
+        cursor = self.conn.cursor() # Get the database cursor
+        cursor.execute("SELECT id, title, category FROM notes") # Query the metadata of the notes
+        notes_metadata = cursor.fetchall() # Get all results
+        all_categories = set() # A set to store unique categories
         for note_id, title, category in notes_metadata:
             if category:
-                all_categories.add(category) # Kategori varsa kümeye ekle
-        return notes_metadata, all_categories # Meta verileri ve kategorileri döndür
+                all_categories.add(category) # Add the category to the set if it exists
+        return notes_metadata, all_categories # Return the metadata and categories
 
-    # create_category metodu, mevcut şemada kategoriler notların bir parçası olduğu için
-    # bir yer tutucudur. Gelecekte ayrı kategori yönetimi için kullanılabilir.
+    # The create_category method is a placeholder since categories are part of the notes in the current schema.
+    # It can be used for separate category management in the future.
     def create_category(self, category_name):
-        # Şu an için, bu kategoriye sahip bir not kaydedildiğinde kategori örtük olarak
-        # oluşturulduğu varsayıldığı için her zaman True döndürür.
+        # For now, it always returns True as it is assumed that the category is implicitly created
+        # when a note with this category is saved.
         return True
 
-    # read_note_content metodu, belirli bir notun içeriğini döndürür.
-    # note_id: İçeriği okunacak notun ID'si.
+    # The read_note_content method returns the content of a specific note.
+    # note_id: The ID of the note whose content is to be read.
     def read_note_content(self, note_id):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
-        cursor.execute("SELECT content FROM notes WHERE id = ?", (note_id,)) # İçeriği sorgula
-        result = cursor.fetchone() # İlk sonucu al
-        return result[0] if result else None # Sonuç varsa içeriği, yoksa None döndür
+        cursor = self.conn.cursor() # Get the database cursor
+        cursor.execute("SELECT content FROM notes WHERE id = ?", (note_id,)) # Query the content
+        result = cursor.fetchone() # Get the first result
+        return result[0] if result else None # Return the content if there is a result, otherwise None
 
-    # save_note metodu, bir notu kaydeder (yeni oluşturur veya günceller).
-    # note_id: Güncellenecek notun ID'si (None ise yeni not oluşturulur).
-    # note_content: Notun içeriği.
-    # category: Notun kategorisi (isteğe bağlı).
+    # The save_note method saves a note (creates a new one or updates it).
+    # note_id: The ID of the note to be updated (if None, a new note is created).
+    # note_content: The content of the note.
+    # category: The category of the note (optional).
     def save_note(self, note_id, note_content, category=""):
-        from uuid import uuid4 # Benzersiz ID oluşturmak için
-        now = datetime.now().isoformat() # Mevcut zamanı ISO formatında al
-        title = note_content.split('\n')[0].strip() # İlk satırı başlık olarak al
+        from uuid import uuid4 # To generate a unique ID
+        now = datetime.now().isoformat() # Get the current time in ISO format
+        title = note_content.split('\n')[0].strip() # Get the first line as the title
 
         if not title:
-            title = "Untitled Note" # Başlık boşsa varsayılan başlık ata
+            title = "Untitled Note" # Assign a default title if the title is empty
 
         if note_id:
-            # Mevcut notu güncelle
-            cursor = self.conn.cursor() # Veritabanı imlecini al
+            # Update the existing note
+            cursor = self.conn.cursor() # Get the database cursor
             cursor.execute("UPDATE notes SET title = ?, content = ?, category = ?, updated_at = ? WHERE id = ?",
-                           (title, note_content, category, now, note_id)) # Notu güncelle
-            self.conn.commit() # Değişiklikleri kaydet
-            return note_id, title # Not ID'si ve başlığı döndür
+                           (title, note_content, category, now, note_id)) # Update the note
+            self.conn.commit() # Save the changes
+            return note_id, title # Return the note ID and title
         else:
-            # Yeni not oluştur
-            new_note_id = str(uuid4()) # Yeni benzersiz ID oluştur
-            cursor = self.conn.cursor() # Veritabanı imlecini al
+            # Create a new note
+            new_note_id = str(uuid4()) # Create a new unique ID
+            cursor = self.conn.cursor() # Get the database cursor
             cursor.execute("INSERT INTO notes (id, title, content, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                           (new_note_id, title, note_content, category, now, now)) # Yeni notu ekle
-            self.conn.commit() # Değişiklikleri kaydet
-            return new_note_id, title # Yeni not ID'si ve başlığı döndür
+                           (new_note_id, title, note_content, category, now, now)) # Add the new note
+            self.conn.commit() # Save the changes
+            return new_note_id, title # Return the new note ID and title
 
-    # rename_note metodu, bir notun başlığını günceller.
-    # note_id: Yeniden adlandırılacak notun ID'si.
-    # new_title: Notun yeni başlığı.
-    # category: Notun kategorisi (şu an kullanılmıyor ama uyumluluk için tutuluyor).
+    # The rename_note method updates the title of a note.
+    # note_id: The ID of the note to be renamed.
+    # new_title: The new title of the note.
+    # category: The category of the note (currently not used but kept for compatibility).
     def rename_note(self, note_id, new_title, category=""):
-        now = datetime.now().isoformat() # Mevcut zamanı ISO formatında al
-        cursor = self.conn.cursor() # Veritabanı imlecini al
+        now = datetime.now().isoformat() # Get the current time in ISO format
+        cursor = self.conn.cursor() # Get the database cursor
         cursor.execute("UPDATE notes SET title = ?, updated_at = ? WHERE id = ?",
-                       (new_title, now, note_id)) # Notun başlığını güncelle
-        self.conn.commit() # Değişiklikleri kaydet
-        return True, new_title # Başarılı olduğunu ve yeni başlığı döndür
+                       (new_title, now, note_id)) # Update the title of the note
+        self.conn.commit() # Save the changes
+        return True, new_title # Indicate success and return the new title
 
-    # get_all_note_titles_and_ids metodu, tüm notların başlıklarını ve ID'lerini bir sözlük olarak döndürür.
+    # The get_all_note_titles_and_ids method returns the titles and IDs of all notes as a dictionary.
     def get_all_note_titles_and_ids(self):
-        cursor = self.conn.cursor() # Veritabanı imlecini al
-        cursor.execute("SELECT title, id FROM notes") # Başlık ve ID'leri sorgula
-        return {title: note_id for title, note_id in cursor.fetchall()} # Sözlük olarak döndür
+        cursor = self.conn.cursor() # Get the database cursor
+        cursor.execute("SELECT title, id FROM notes") # Query the titles and IDs
+        return {title: note_id for title, note_id in cursor.fetchall()} # Return as a dictionary
 
-    # get_all_note_links metodu, tüm not bağlantılarını (source_note_id, target_note_id) çiftleri olarak döndürür.
+    # The get_all_note_links method returns all note links as pairs of (source_note_id, target_note_id).
     def get_all_note_links(self):
         cursor = self.conn.cursor()
         cursor.execute("SELECT source_note_id, target_note_id FROM note_links")
@@ -294,8 +294,8 @@ class DatabaseManager:
             self.conn.rollback()
             raise e
 
-    # close_connection metodu, veritabanı bağlantısını kapatır.
+    # The close_connection method closes the database connection.
     def close_connection(self):
         if self.conn:
-            self.conn.close() # Bağlantıyı kapat
+            self.conn.close() # Close the connection
             self.conn = None

@@ -3,3 +3,4 @@ python-dotenv
 markdown
 google-generativeai
 PyPDF2
+pygraphviz

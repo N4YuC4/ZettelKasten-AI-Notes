@@ -1,44 +1,44 @@
 # ai_note_generator_worker.py
 #
-# Bu dosya, yapay zeka (AI) kullanarak PDF içeriğinden Zettelkasten tarzı notlar oluşturan
-# ve bu notları veritabanına kaydeden bir işçi sınıfını (worker class) tanımlar.
-# İşlem, GUI'yi dondurmamak için ayrı bir iş parçacığında (thread) yürütülür.
+# This file defines a worker class that generates Zettelkasten-style notes from PDF content
+# using artificial intelligence (AI) and saves these notes to the database.
+# The process is executed in a separate thread to avoid freezing the GUI.
 
-from PyQt5.QtCore import QObject, pyqtSignal # PyQt sinyal ve nesne sistemi için
-from gemini_api_client import GeminiApiClient # Gemini API ile etkileşim için
-import note_manager # Not yönetimi işlevleri için (kaydetme, başlık sanitizasyonu)
-import database_manager # Veritabanı işlemleri için
-from logger import log_debug # Hata ayıklama loglama fonksiyonu için
-from uuid import uuid4 # Benzersiz ID oluşturmak için
-from datetime import datetime # Zaman damgaları için
+from PyQt5.QtCore import QObject, pyqtSignal # For PyQt signal and object system
+from gemini_api_client import GeminiApiClient # For interacting with the Gemini API
+import note_manager # For note management functions (saving, title sanitization)
+import database_manager # For database operations
+from logger import log_debug # For debug logging function
+from uuid import uuid4 # For generating unique IDs
+from datetime import datetime # For timestamps
 
-# AiNoteGeneratorWorker sınıfı, AI not oluşturma işlemini ayrı bir iş parçacığında yürütür.
-# QObject'ten türetilmiştir, böylece sinyal/slot mekanizmasını kullanabilir.
+# The AiNoteGeneratorWorker class executes the AI note generation process in a separate thread.
+# It is derived from QObject to use the signal/slot mechanism.
 class AiNoteGeneratorWorker(QObject):
-    # finished sinyali: İşlem başarıyla tamamlandığında oluşturulan notların listesini yayar.
+    # finished signal: Emits a list of generated notes when the process is successfully completed.
     finished = pyqtSignal(list) 
-    # error sinyali: İşlem sırasında bir hata oluştuğunda hata mesajını yayar.
+    # error signal: Emits an error message when an error occurs during the process.
     error = pyqtSignal(str) 
 
-    # __init__ metodu, işçi nesnesini başlatır.
-    # extracted_text: PDF'ten çıkarılan metin.
+    # The __init__ method initializes the worker object.
+    # extracted_text: The text extracted from the PDF.
     def __init__(self, extracted_text):
         super().__init__()
-        self.extracted_text = extracted_text # İşlenecek metni sakla
+        self.extracted_text = extracted_text # Store the text to be processed
 
-    # run metodu, iş parçacığı başladığında çağrılan ana işlevdir.
-    # AI not oluşturma, kaydetme ve bağlama mantığını içerir.
+    # The run method is the main function called when the thread starts.
+    # It contains the logic for AI note generation, saving, and linking.
     def run(self):
-        # Bu iş parçacığı için yeni bir DatabaseManager örneği oluştur.
-        # Her iş parçacığının kendi veritabanı bağlantısı olmalıdır.
+        # Create a new DatabaseManager instance for this thread.
+        # Each thread should have its own database connection.
         db_manager_worker = database_manager.DatabaseManager()
         try:
-            gemini_client = GeminiApiClient() # Gemini API istemcisini oluştur
-            # Gemini API'yi kullanarak Zettelkasten notları oluştur
+            gemini_client = GeminiApiClient() # Create the Gemini API client
+            # Generate Zettelkasten notes using the Gemini API
             generated_notes = gemini_client.generate_zettelkasten_notes(self.extracted_text)
 
-            if generated_notes: # Notlar başarıyla oluşturulduysa
-                # Kapsamlı bir arama için mevcut notları ve ID'lerini yükle
+            if generated_notes: # If notes were successfully generated
+                # Load existing notes and their IDs for a comprehensive search
                 title_to_id = db_manager_worker.get_all_note_titles_and_ids()
                 log_debug(f"DEBUG: Initial title_to_id: {title_to_id}")
 
@@ -46,7 +46,7 @@ class AiNoteGeneratorWorker(QObject):
                 links_to_insert = []
                 new_note_mappings = {}
 
-                # Aşama 1: Not verilerini ve geçici kimlikleri hazırla
+                # Stage 1: Prepare note data and temporary IDs
                 for note_data in generated_notes:
                     temp_id = str(uuid4())
                     title = note_data.get('title', 'Untitled Note')
@@ -54,11 +54,11 @@ class AiNoteGeneratorWorker(QObject):
                     new_note_mappings[sanitized_title] = temp_id
                     note_data['_temp_id'] = temp_id
 
-                # Hem mevcut hem de yeni not başlıklarını birleştir
+                # Merge both existing and new note titles
                 title_to_id.update(new_note_mappings)
 
                 now = datetime.now().isoformat()
-                # Aşama 2: Notları ve bağlantıları eklemek için listeleri oluştur
+                # Stage 2: Create lists for inserting notes and links
                 for note_data in generated_notes:
                     source_id = note_data['_temp_id']
                     title = note_data.get('title', 'Untitled Note')
@@ -81,7 +81,7 @@ class AiNoteGeneratorWorker(QObject):
                         else:
                             log_debug(f"DEBUG: Could not find target_id for '{sanitized_target_title}' (raw: '{target_title_raw}'). Link not inserted.")
 
-                # Aşama 3: Toplu veritabanı işlemleri
+                # Stage 3: Bulk database operations
                 if notes_to_insert:
                     db_manager_worker.bulk_insert_notes(notes_to_insert)
                     log_debug(f"DEBUG: Bulk inserted {len(notes_to_insert)} notes.")
