@@ -1,9 +1,10 @@
 # pdf_processor.py
 #
 # This file contains helper functions for extracting text from PDF files.
-# It uses the PyPDF2 library to extract text from all pages of a PDF file.
+# It uses the pypdf library to extract text from all pages of a PDF file.
 
-import PyPDF2 # Library for reading and processing PDF files
+import pypdf # Library for reading and processing PDF files
+from logger import log_error # For error logging function
 
 # The extract_text_from_pdf function extracts text from a specific PDF file.
 # pdf_path (str): The path to the PDF file.
@@ -19,11 +20,11 @@ def extract_text_from_pdf(pdf_path):
     text = "" # An empty string to store the extracted text
     try:
         with open(pdf_path, "rb") as file: # Read the PDF file in binary mode
-            reader = PyPDF2.PdfReader(file) # Create a PdfReader object
-            for page_num in range(len(reader.pages)): # Loop for each page
-                text += reader.pages[page_num].extract_text() # Extract and append the text from the page
+            reader = pypdf.PdfReader(file) # Create a PdfReader object
+            for page in reader.pages: # Loop for each page
+                text += page.extract_text() or "" # Extract and append the text from the page
     except Exception as e:
-        print(f"Error extracting text from PDF: {e}") # Print if an error occurs
+        log_error(f"Error extracting text from PDF: {e}") # Log error if an exception occurs
         return None # Return None
     return text # Return all the extracted text
 

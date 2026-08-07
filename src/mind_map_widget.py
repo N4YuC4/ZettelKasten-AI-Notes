@@ -1,351 +1,276 @@
-from PyQt5.QtWidgets import QWidget, QApplication
-from PyQt5.QtGui import QPainter, QColor, QFont, QPen
-from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal, QRect, QTimer
+# pyrefly: ignore [missing-import]
+import flet as ft
+import flet.canvas as cv
 import math
 from logger import log_debug
-import pygraphviz as pgv
 
-class MindMapWidget(QWidget):
-    """A custom QWidget for displaying a mind map of interconnected notes.
-    
-    This widget visualizes notes as nodes and their links as directed edges.
-    It supports zooming, panning, and node selection, emitting a signal when a node is clicked.
-    """
-    note_selected = pyqtSignal(str) # Emits the ID of the selected note when a node is clicked.
-
-    def __init__(self, db_manager, parent=None):
-        """Initializes the MindMapWidget.
-
-        Args:
-            db_manager: The DatabaseManager instance for interacting with note data.
-            parent: The parent widget, if any.
-        """
-        super().__init__(parent)
+# The MindMapWidget is a custom Flet control derived from ft.GestureDetector.
+# It uses Flet Canvas shapes to draw a mind map of Zettelkasten notes and connections,
+# and detects node clicks using coordinate bounding boxes.
+class MindMapWidget(ft.Container):
+    # The __init__ method initializes the widget with a database manager and a selection callback.
+    def __init__(self, db_manager, on_note_selected):
+        super().__init__()
         self.db_manager = db_manager
-        # Stores note data: {note_id: {'title': title, 'pos': QPointF, 'rect': QRectF, 'size': (width, height)}}
-        self.notes = {}  
-        self.links = []  # Stores links as a list of (source_note_id, target_note_id) tuples.
-        self.current_note_id = None # The ID of the currently selected/focused note.
-        self.levels = {} # Stores the level of each note in the graph.
+        self.on_note_selected = on_note_selected
+        self.notes = {}
+        self.links = []
+        self.current_note_id = None
+        self.node_positions = {} # Persisted coordinates {note_id: {'pos': ..., 'rect': ..., 'size': ...}}
+        self._last_nodes_set = None
+        self._last_links_set = None
         
-        # --- Node Styling and Layout Parameters ---
-        self.node_radius = 10 # Base radius for nodes, used in size calculations.
-        self.node_padding = 5 # Inner padding between node text and node border.
-        self.node_margin = 80 # Minimum outer spacing between connected nodes.
-        self.isolated_node_margin = 160 # Outer spacing for nodes with no direct connections.
-        self.vertical_spacing_factor = 3.5 # Multiplier for vertical spacing between levels.
-        self.font = QFont("Arial", 10) # The font used to render note titles.
+        # Dimensions of the widget view
+        self.width = 350
+        self.height = 350
+        self.clip_behavior = ft.ClipBehavior.HARD_EDGE
+        self.bgcolor = ft.Colors.TRANSPARENT
         
-        # --- Viewport Control Parameters ---
-        self.zoom_factor = 1.0 # The current zoom level of the mind map.
-        self.offset_x = 0.0 # The X-offset for panning the view.
-        self.offset_y = 0.0 # The Y-offset for panning the view.
-        self._last_mouse_pos = None # Stores the last mouse position during panning.
-
-        self.setMinimumSize(400, 300) # Sets the minimum size of the widget.
-        self.setMouseTracking(True) # Enables mouse tracking (though not currently implemented).
-
-        # --- Layout Debouncing ---
-        # A QTimer used to debounce resize events,
-        # preventing excessive layout recalculations.
-        self.layout_timer = QTimer(self)
-        self.layout_timer.setSingleShot(True) # Ensures the timer only fires once per start.
-        self.layout_timer.timeout.connect(self._perform_layout) # Connects the timer timeout to the layout method.
-        self.layout_delay_ms = 100 # The delay (in milliseconds) before recalculating the layout on resize.
-
-        # --- Node Level Colors ---
-        # A list of colors used to differentiate notes based on their level in the graph hierarchy.
-        self.level_colors = [
-            QColor(255, 99, 71),   # Tomato
-            QColor(60, 179, 113),  # MediumSeaGreen
-            QColor(65, 105, 225),  # RoyalBlue
-            QColor(255, 165, 0),   # Orange
-            QColor(147, 112, 219), # MediumPurple
-            QColor(0, 191, 255),   # DeepSkyBlue
-            QColor(255, 20, 147),  # DeepPink
-            QColor(0, 128, 128),   # Teal
-            QColor(218, 165, 32),  # Goldenrod
-            QColor(127, 255, 0)    # Chartreuse
-        ]
-
+        # Inner Canvas where shapes are drawn
+        self.canvas = cv.Canvas(shapes=[])
+        
+        # GestureDetector catches taps for the nodes
+        self.gd = ft.GestureDetector(
+            content=self.canvas,
+            on_tap_down=self.handle_tap_down
+        )
+        
+        # InteractiveViewer handles panning and zooming
+        self.viewer = ft.InteractiveViewer(
+            min_scale=0.1,
+            max_scale=4.0,
+            boundary_margin=ft.Margin(300, 300, 300, 300),
+            content=self.gd,
+            pan_enabled=True,
+            scale_enabled=True,
+            constrained=False
+        )
+        
+        self.content = self.viewer
+        
+    # The update_map method rebuilds the layout and draws the map.
+    # all_notes_metadata: A list of tuples containing (note_id, title, category)
+    # all_links: A list of tuples containing (source_note_id, target_note_id)
+    # current_note_id: The ID of the currently selected note.
     def update_map(self, all_notes_metadata, all_links, current_note_id=None):
-        """Updates the mind map with new note data and links.
-
-        This method clears the existing data, populates new notes and links,
-        and then triggers a layout recalculation and repaint.
-
-        Args:
-            all_notes_metadata (list): A list of tuples, each containing (note_id, title, category_path) for a note.
-            all_links (list): A list of (source_note_id, target_note_id) tuples representing links.
-            current_note_id (str, optional): The ID of the currently focused note.
-                                             Defaults to None.
-        """
         self.notes.clear()
         self.links = all_links
         self.current_note_id = current_note_id
-
+        
+        # Initialize note metadata
         for note_id, title, _ in all_notes_metadata:
-            self.notes[note_id] = {'title': title, 'pos': QPointF(), 'rect': QRectF()}
-
+            self.notes[note_id] = {'title': title, 'pos': (175, 175), 'rect': (0, 0, 0, 0)}
+            
         self._layout_nodes()
-        self.center_on_nodes()
-        self.repaint()
-
-    def _perform_layout(self):
-        """Triggers the node layout calculation and updates the widget.
-
-        This method is typically called after a resize event or when the map data changes
-        to ensure nodes are positioned correctly.
-        """
-        self._layout_nodes()
-        self.update()
-
-    def center_on_nodes(self):
+        self._draw_map()
+        
+    # The _layout_nodes method computes node coordinates using PyGraphviz layout.
+    def _layout_nodes(self):
         if not self.notes:
             return
 
+        current_nodes_set = set(self.notes.keys())
+        current_links_set = set(self.links)
+
+        # Check if node topology or links changed
+        if self._last_nodes_set is not None and self._last_links_set is not None:
+            if self._last_nodes_set == current_nodes_set and self._last_links_set == current_links_set:
+                if self.node_positions:
+                    for note_id in self.notes:
+                        if note_id in self.node_positions:
+                            self.notes[note_id]['pos'] = self.node_positions[note_id]['pos']
+                            self.notes[note_id]['rect'] = self.node_positions[note_id]['rect']
+                            self.notes[note_id]['size'] = self.node_positions[note_id]['size']
+                    return
+
+        self._last_nodes_set = current_nodes_set
+        self._last_links_set = current_links_set
+
+        # 1. Pre-calculate node dimensions and store them
+        for note_id, data in self.notes.items():
+            title = data['title']
+            node_width = max(110, len(title) * 8 + 30)
+            node_height = 40
+            self.notes[note_id]['size'] = (node_width, node_height)
+
+        raw_positions = {}
+
+        try:
+            import pygraphviz as pgv
+            # Configure layout spacing and direction (Left to Right)
+            G = pgv.AGraph(directed=True, strict=True, rankdir='LR', nodesep='0.5', ranksep='1.0')
+            
+            for note_id, data in self.notes.items():
+                node_width, node_height = data['size']
+                # Convert to inches (1 inch = 72 points)
+                w_inches = (node_width + 20) / 72.0
+                h_inches = (node_height + 10) / 72.0
+                # Use fixedsize='shape' to prevent Graphviz 'size too small for label' warnings
+                G.add_node(note_id, label=data['title'], shape='box', width=str(w_inches), height=str(h_inches), fixedsize='shape')
+            
+            for source_id, target_id in self.links:
+                if G.has_node(source_id) and G.has_node(target_id):
+                    G.add_edge(source_id, target_id)
+            
+            G.layout(prog='dot')
+            
+            for node in G.nodes():
+                try:
+                    pos = node.attr['pos'].split(',')
+                    x = float(pos[0])
+                    y = float(pos[1]) # Keep y positive, coordinates will be centered and scaled later
+                    raw_positions[str(node)] = (x, y)
+                except (KeyError, IndexError, ValueError):
+                    pass
+        except Exception as e:
+            log_debug(f"PyGraphviz layout failed: {e}, using simple grid layout.")
+            # Fallback simple layout if pgv fails
+            nodes_list = list(self.notes.keys())
+            nodes_per_row = int(len(nodes_list)**0.5) + 1
+            for i, node_id in enumerate(nodes_list):
+                row = i // nodes_per_row
+                col = i % nodes_per_row
+                raw_positions[node_id] = (col * 150, row * 100)
+
+        # 6. Find raw bounding box and shift coordinates to fit inside InteractiveViewer
         min_x = float('inf')
         max_x = float('-inf')
         min_y = float('inf')
         max_y = float('-inf')
 
-        for note_id, data in self.notes.items():
-            pos = data['pos']
-            size = data['size']
-            min_x = min(min_x, pos.x() - size[0] / 2)
-            max_x = max(max_x, pos.x() + size[0] / 2)
-            min_y = min(min_y, pos.y() - size[1] / 2)
-            max_y = max(max_y, pos.y() + size[1] / 2)
+        for note_id, (x, y) in raw_positions.items():
+            w, h = self.notes[note_id]['size']
+            min_x = min(min_x, x - w/2)
+            max_x = max(max_x, x + w/2)
+            min_y = min(min_y, y - h/2)
+            max_y = max(max_y, y + h/2)
 
         if min_x == float('inf'):
-            return
+            min_x, max_x, min_y, max_y = 0, 0, 0, 0
 
-        map_width = max_x - min_x
-        map_height = max_y - min_y
+        padding = 50
+        total_width = max(350, max_x - min_x + 2 * padding)
+        total_height = max(350, max_y - min_y + 2 * padding)
 
-        if map_width == 0 or map_height == 0:
-            return
+        self.gd.width = total_width
+        self.gd.height = total_height
+        self.canvas.width = total_width
+        self.canvas.height = total_height
 
-        x_scale = self.width() / map_width
-        y_scale = self.height() / map_height
-        self.zoom_factor = min(x_scale, y_scale) * 0.9
+        self.node_positions.clear()
 
-        self.offset_x = -min_x + (self.width() / self.zoom_factor - map_width) / 2
-        self.offset_y = -min_y + (self.height() / self.zoom_factor - map_height) / 2
-        self.update()
+        for note_id, (raw_x, raw_y) in raw_positions.items():
+            mapped_x = (raw_x - min_x) + padding
+            mapped_y = (raw_y - min_y) + padding
 
-    def _layout_nodes(self):
-        if not self.notes:
-            return
+            w, h = self.notes[note_id]['size']
+            
+            rx = mapped_x - w / 2
+            ry = mapped_y - h / 2
 
-        G = pgv.AGraph(directed=True, strict=True, splines='spline', overlap='scale', sep="+25,25")
+            self.notes[note_id]['pos'] = (mapped_x, mapped_y)
+            self.notes[note_id]['rect'] = (rx, ry, rx + w, ry + h)
 
-        for note_id, data in self.notes.items():
-            G.add_node(note_id, label=data['title'], shape='box')
-
-        for source_id, target_id in self.links:
-            if G.has_node(source_id) and G.has_node(target_id):
-                G.add_edge(source_id, target_id)
-
-        G.layout(prog='neato')
-
-        for node in G.nodes():
-            try:
-                pos = node.attr['pos'].split(',')
-                x = float(pos[0])
-                y = float(pos[1])
-                self.notes[node]['pos'] = QPointF(x, y)
-                size = self.fontMetrics().boundingRect(QRect(0, 0, 1000, 1000), Qt.AlignCenter, node.attr['label'])
-                self.notes[node]['size'] = (size.width() + self.node_padding * 2, size.height() + self.node_padding * 2)
-            except (KeyError, IndexError, ValueError) as e:
-                print(f"Error processing node {node}: {e}")
-
-    def paintEvent(self, event):
-        """Draws the mind map on the widget.
-
-        This method is called whenever the widget needs to be repainted.
-        It draws the links (arrows) between notes, and then draws each note node
-        with its title and appropriate styling.
-
-        Args:
-            event (QPaintEvent): The paint event object.
-        """
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setFont(self.font)
+            # Persist positions for future layout updates
+            self.node_positions[note_id] = {
+                'pos': (mapped_x, mapped_y),
+                'rect': (rx, ry, rx + w, ry + h),
+                'size': (w, h)
+            }
+                
+    # The _draw_map method populates the Flet Canvas shapes list and renders it.
+    def _draw_map(self):
+        shapes = []
         
-        painter.scale(self.zoom_factor, self.zoom_factor)
-        painter.translate(self.offset_x, self.offset_y)
-
-        link_pen = QPen(QColor(150, 150, 150), 1)
-        arrow_size = 8
-
+        # 1. Draw edge links (lines with arrowheads)
+        edge_width = 1.5
+        edge_paint = ft.Paint(color=ft.Colors.OUTLINE, stroke_width=edge_width, style=ft.PaintingStyle.STROKE)
+        
         for source_id, target_id in self.links:
             if source_id in self.notes and target_id in self.notes:
-                start_pos = self.notes[source_id]['pos']
-                end_pos = self.notes[target_id]['pos']
-
-                painter.setPen(link_pen)
-                painter.drawLine(start_pos, end_pos)
-
-                dx = end_pos.x() - start_pos.x()
-                dy = end_pos.y() - start_pos.y()
-                angle = math.atan2(dy, dx)
+                start_x, start_y = self.notes[source_id]['pos']
+                end_x, end_y = self.notes[target_id]['pos']
                 
-                painter.drawLine(end_pos, end_pos - QPointF(arrow_size * math.cos(angle - math.pi / 6), arrow_size * math.sin(angle - math.pi / 6)))
-                painter.drawLine(end_pos, end_pos - QPointF(arrow_size * math.cos(angle + math.pi / 6), arrow_size * math.sin(angle + math.pi / 6)))
-
-        node_border_pen = QPen(QColor(0, 0, 0), 3)
-
+                # Calculate direct distance
+                dx = end_x - start_x
+                dy = end_y - start_y
+                dist = math.hypot(dx, dy)
+                if dist == 0:
+                    continue
+                    
+                target_w, target_h = self.notes[target_id]['size']
+                # Stop edge line at target node border
+                radius = min(target_w, target_h) / 2 + 5
+                
+                adj_end_x = end_x - (dx / dist) * radius
+                adj_end_y = end_y - (dy / dist) * radius
+                
+                # Edge line
+                shapes.append(cv.Line(x1=start_x, y1=start_y, x2=adj_end_x, y2=adj_end_y, paint=edge_paint))
+                
+                # Arrowhead lines
+                angle = math.atan2(dy, dx)
+                arrow_size = 8
+                
+                x1 = adj_end_x - arrow_size * math.cos(angle - math.pi / 6)
+                y1 = adj_end_y - arrow_size * math.sin(angle - math.pi / 6)
+                x2 = adj_end_x - arrow_size * math.cos(angle + math.pi / 6)
+                y2 = adj_end_y - arrow_size * math.sin(angle + math.pi / 6)
+                
+                shapes.append(cv.Line(x1=adj_end_x, y1=adj_end_y, x2=x1, y2=y1, paint=edge_paint))
+                shapes.append(cv.Line(x1=adj_end_x, y1=adj_end_y, x2=x2, y2=y2, paint=edge_paint))
+                
+        # 2. Draw nodes
+        border_width = 2.0
+        border_paint = ft.Paint(color=ft.Colors.OUTLINE, stroke_width=border_width, style=ft.PaintingStyle.STROKE)
+        
         for note_id, data in self.notes.items():
-            pos = data['pos']
+            mapped_x, mapped_y = data['pos']
+            rx, ry, rx2, ry2 = data['rect']
+            w, h = data['size']
             title = data['title']
-
-            node_width, node_height = data.get('size', (100, 50))
-
-            rect = QRectF(pos.x() - node_width / 2, pos.y() - node_height / 2, node_width, node_height)
-            self.notes[note_id]['rect'] = rect
-
-            node_level = self.levels.get(note_id, 0)
-            node_color_index = node_level % len(self.level_colors)
-            node_color = self.level_colors[node_color_index]
-
-            if note_id == self.current_note_id:
-                painter.setBrush(node_color.lighter(150))
-            else:
-                painter.setBrush(node_color)
-            painter.setPen(node_border_pen)
-            painter.drawRoundedRect(rect, 10, 10)
-
-            painter.setPen(QColor(0, 0, 0))
-            painter.drawText(rect, Qt.AlignCenter, title)
-
-    def mousePressEvent(self, event):
-        """Handles mouse press events for node selection and initiating panning.
-
-        If the left mouse button is pressed, it checks if a note node was clicked
-        and emits the `note_selected` signal. If the right mouse button is pressed, it
-        saves the position to initiate panning.
-
-        Args:
-            event (QMouseEvent): The mouse event object.
-        """
-        if event.button() == Qt.LeftButton:
-            transformed_x = (event.pos().x() / self.zoom_factor) - self.offset_x
-            transformed_y = (event.pos().y() / self.zoom_factor) - self.offset_y
-            transformed_pos = QPointF(transformed_x, transformed_y)
-
-            for note_id, data in self.notes.items():
-                if data['rect'].contains(transformed_pos):
-                    self.current_note_id = note_id
-                    self.note_selected.emit(note_id)
-                    self.update()
-                    break
-        elif event.button() == Qt.RightButton:
-            self._last_mouse_pos = event.pos()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        """Handles mouse move events for panning.
-
-        If the right mouse button is held down and a drag is in progress, it updates
-        the map's offset based on the mouse movement, effectively panning the view.
-
-        Args:
-            event (QMouseEvent): The mouse event object.
-        """
-        if event.buttons() == Qt.RightButton and self._last_mouse_pos:
-            delta = event.pos() - self._last_mouse_pos
-            self.offset_x += delta.x() / self.zoom_factor
-            self.offset_y += delta.y() / self.zoom_factor
-            self._last_mouse_pos = event.pos()
-            self.update()
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        """Handles mouse release events, primarily to terminate panning.
-
-        If the right mouse button is released, it clears the saved last mouse position.
-
-        Args:
-            event (QMouseEvent): The mouse event object.
-        """
-        if event.button() == Qt.RightButton:
-            self._last_mouse_pos = None
-        super().mouseReleaseEvent(event)
-
-    def wheelEvent(self, event):
-        """Handles mouse wheel events for zooming in and out.
-
-        Zooms the mind map in or out based on the scroll direction and adjusts the offset
-        to keep the zoom centered around the mouse cursor.
-
-        Args:
-            event (QWheelEvent): The wheel event object.
-        """
-        zoom_in_factor = 1.1
-        zoom_out_factor = 0.9
-
-        old_zoom_factor = self.zoom_factor
-        if event.angleDelta().y() > 0:
-            self.zoom_factor *= zoom_in_factor
-        else:
-            self.zoom_factor *= zoom_out_factor
-
-        self.zoom_factor = max(0.1, min(self.zoom_factor, 5.0))
-
-        mouse_pos = event.pos()
-
-        self.offset_x = (mouse_pos.x() / self.zoom_factor) - (mouse_pos.x() / old_zoom_factor) + self.offset_x
-        self.offset_y = (mouse_pos.y() / self.zoom_factor) - (mouse_pos.y() / old_zoom_factor) + self.offset_y
-
-        self.update()
-        super().wheelEvent(event)
-
-    def resizeEvent(self, event):
-        """Handles widget resize events.
-
-        Triggers a debounced layout recalculation to adapt node positions to the new size.
-
-        Args:
-            event (QResizeEvent): The resize event object.
-        """
-        self.layout_timer.stop()
-        self.layout_timer.start(self.layout_delay_ms)
-        super().resizeEvent(event)
-
-if __name__ == '__main__':
-    # This is a placeholder for testing the widget independently.
-    # In the actual application, db_manager will be passed from main.py.
-    class MockDatabaseManager:
-        def get_all_notes_metadata(self):
-            return [
-                ("1", "Note A", ""),
-                ("2", "Note B", ""),
-                ("3", "Note C", ""),
-                ("4", "Note D", ""),
-                ("5", "Note E", ""),
-            ]
-        def get_all_note_links(self):
-            return [
-                ("1", "2"),
-                ("1", "3"),
-                ("2", "4"),
-                ("3", "5"),
-                ("4", "5"),
-            ]
-
-    app = QApplication([])
-    db_manager = MockDatabaseManager()
-    widget = MindMapWidget(db_manager)
-
-    all_notes_metadata, _ = db_manager.get_all_notes_metadata(), None
-    all_links = db_manager.get_all_note_links()
-    widget.update_map(all_notes_metadata, all_links, current_note_id="1")
-
-    widget.zoom_factor = 1.0
-    widget.setMinimumSize(400, 300)
-    widget.setMouseTracking(True)
-
-    widget.show()
-    app.exec_()
+            
+            # Use specific color based on selection status
+            is_current = (note_id == self.current_note_id)
+            color = ft.Colors.PRIMARY if is_current else ft.Colors.SURFACE_CONTAINER_HIGHEST
+            
+            fill_paint = ft.Paint(color=color, style=ft.PaintingStyle.FILL)
+            
+            # Dynamic border radius
+            node_border_radius = 8
+            
+            # Node background rectangle
+            shapes.append(cv.Rect(x=rx, y=ry, width=w, height=h, border_radius=node_border_radius, paint=fill_paint))
+            # Node border rectangle
+            shapes.append(cv.Rect(x=rx, y=ry, width=w, height=h, border_radius=node_border_radius, paint=border_paint))
+            
+            # Node text label with dynamic font size (minimum 9px)
+            font_size = 13
+            shapes.append(cv.Text(
+                x=mapped_x,
+                y=mapped_y,
+                value=title,
+                alignment=ft.Alignment.CENTER,
+                style=ft.TextStyle(size=font_size, color=ft.Colors.ON_PRIMARY if is_current else ft.Colors.ON_SURFACE_VARIANT, weight=ft.FontWeight.BOLD)
+            ))
+            
+        self.canvas.shapes = shapes
+        self.canvas.update()
+        
+    # The handle_tap_down method checks if any node is clicked in the canvas space.
+    def handle_tap_down(self, e: ft.TapEvent):
+        try:
+            click_x = e.local_position.x
+            click_y = e.local_position.y
+        except AttributeError:
+            # Fallback for older Flet versions
+            click_x = getattr(e, 'local_x', 0)
+            click_y = getattr(e, 'local_y', 0)
+        
+        for note_id, data in self.notes.items():
+            rx, ry, rx2, ry2 = data['rect']
+            if rx <= click_x <= rx2 and ry <= click_y <= ry2:
+                self.current_note_id = note_id
+                self.on_note_selected(note_id)
+                self._draw_map()
+                break

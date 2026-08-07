@@ -6,7 +6,9 @@
 
 import sqlite3 # To work with the SQLite database
 import os # For file system operations
+import threading # For thread-local database connections
 from datetime import datetime # For timestamps
+from logger import log_error # For error logging function
 
 # The path to the database file. It is located in the 'db' folder in the application's root directory.
 DATABASE_FILE = os.path.join("db", "notes.db")
@@ -14,14 +16,23 @@ DATABASE_FILE = os.path.join("db", "notes.db")
 # The DatabaseManager class manages the SQLite database connection and operations.
 class DatabaseManager:
     # The __init__ method establishes the database connection and creates the necessary tables.
-    def __init__(self):
+    def __init__(self, init_tables=True):
         # Ensure the 'db' folder exists, otherwise create it
         os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True)
-        self.conn = sqlite3.connect(DATABASE_FILE) # Connect to the database
-        self.conn.execute("PRAGMA foreign_keys = ON") # Enable foreign key constraints
-        self.create_notes_table() # Create the notes table
-        self.create_note_links_table() # Create the note links table
-        self._create_settings_table() # Create the settings table
+        self._local = threading.local()
+        if init_tables:
+            self.create_notes_table() # Create the notes table
+            self.create_note_links_table() # Create the note links table
+            self._create_settings_table() # Create the settings table
+
+    @property
+    def conn(self):
+        """Returns a thread-local SQLite connection for thread safety."""
+        if not hasattr(self._local, 'conn') or self._local.conn is None:
+            connection = sqlite3.connect(DATABASE_FILE)
+            connection.execute("PRAGMA foreign_keys = ON")
+            self._local.conn = connection
+        return self._local.conn
 
     # The _create_settings_table method creates a table to store application settings.
     def _create_settings_table(self):
@@ -93,7 +104,7 @@ class DatabaseManager:
     # The note_count method returns the total number of notes in the selected category in the database.
     def note_count(self,category):
         cursor = self.conn.cursor() # Get the database cursor
-        if category == "All Notes": # If all notes are selected
+        if not category: # If all notes are selected (category is empty string or None)
             cursor.execute("SELECT COUNT(*) FROM notes") # Query the count of all notes
         else:
             cursor.execute("SELECT COUNT(*) FROM notes WHERE category = ?", (category,)) # Query the number of notes with the specified category
@@ -168,7 +179,7 @@ class DatabaseManager:
             self.conn.commit() # Save the changes
             return True  # Indicate success
         except sqlite3.Error as e:
-            print(f"Database error during note deletion: {e}") # Print the error message
+            log_error(f"Database error during note deletion: {e}") # Log the error message
             return False # Indicate failure
 
     # The delete_category method deletes a specific category and all notes belonging to it.
@@ -180,7 +191,7 @@ class DatabaseManager:
             self.conn.commit() # Save the changes
             return True  # Indicate success
         except sqlite3.Error as e:
-            print(f"Database error during category deletion: {e}") # Print the error message
+            log_error(f"Database error during category deletion: {e}") # Log the error message
             return False  # Indicate failure
 
     # The get_note method returns all data (ID, title, content, category) of a specific note.
@@ -294,8 +305,8 @@ class DatabaseManager:
             self.conn.rollback()
             raise e
 
-    # The close_connection method closes the database connection.
+    # The close_connection method closes the thread-local database connection.
     def close_connection(self):
-        if self.conn:
-            self.conn.close() # Close the connection
-            self.conn = None
+        if hasattr(self._local, 'conn') and self._local.conn is not None:
+            self._local.conn.close()
+            self._local.conn = None

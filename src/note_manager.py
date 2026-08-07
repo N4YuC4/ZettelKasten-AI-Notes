@@ -29,8 +29,8 @@ def get_sanitized_title(content):
     # Remove strikethrough markers
     sanitized_title = re.sub(r'~~', '', sanitized_title)
     # Remove image/link syntax (e.g., ![alt](url) or [text](url))
-    sanitized_title = re.sub(r'!\\[.*?]\(.*?\\]\)', '', sanitized_title)
-    sanitized_title = re.sub(r'\[.*?]\[.*?]', '', sanitized_title)
+    sanitized_title = re.sub(r'!\[.*?\]\(.*?\)', '', sanitized_title)
+    sanitized_title = re.sub(r'\[.*?\]\(.*?\)', '', sanitized_title)
     # Remove remaining special characters that might be part of markdown or problematic in titles
     sanitized_title = re.sub(r'[<>:"/\\|?*]', '', sanitized_title)
     
@@ -92,7 +92,12 @@ def rename_note(db_manager, note_id, new_title, category_path=""):
     note_data = db_manager.get_note(note_id) # Get the current data of the note
     if note_data:
         current_content = note_data[2] # The content of the note (index 2)
-        # Update the note with the new title and existing content
+        # Update the first line with the new title
+        lines = current_content.split('\n')
+        if lines:
+            lines[0] = f"# {sanitized_new_title}"
+        current_content = '\n'.join(lines)
+        # Update the note with the new title and updated content
         db_manager.update_note(note_id, sanitized_new_title, current_content, category_path)
         log_debug(f"Note with ID {note_id} renamed to {sanitized_new_title}.")
         return True, sanitized_new_title # Indicate success and return the new title

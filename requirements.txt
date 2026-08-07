@@ -1,6 +1,6 @@
-PyQt5
+flet
 python-dotenv
 markdown
-google-generativeai
-PyPDF2
+google-genai
+pypdf
 pygraphviz
