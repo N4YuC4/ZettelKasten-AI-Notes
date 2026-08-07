@@ -1,10 +1,10 @@
 # Zettelkasten AI Notes
 
 ![Python Version](https://img.shields.io/badge/Python-3.x-blue.svg)
-![PyQt5](https://img.shields.io/badge/PyQt5-5.x-green.svg)
+![Flet](https://img.shields.io/badge/Flet-UI-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-A desktop application built with `PyQt5` for efficient knowledge management using the Zettelkasten method. It allows users to create, edit, and link notes, supports `Markdown` for rich content, and offers a real-time preview. It stores all data in a local `SQLite` database. A key feature is its ability to use `Google Gemini AI` to generate Zettelkasten-style notes from PDF documents and automatically suggest relevant links between them. This project was developed for the Artificial Intelligence Hackathon organized by Pupilica.
+A desktop application built with `Flet` for efficient knowledge management using the Zettelkasten method. It allows users to create, edit, and link notes, supports `Markdown` for rich content, and offers a real-time preview. It stores all data in a local `SQLite` database. A key feature is its ability to use `Google Gemini AI` to generate Zettelkasten-style notes from PDF documents and automatically suggest relevant links between them. This project was developed for the Artificial Intelligence Hackathon organized by Pupilica.
 
 ## Key Features
 
@@ -20,11 +20,11 @@ A desktop application built with `PyQt5` for efficient knowledge management usin
 
 ## How it Works
 
-The `main.py` file initializes the `PyQt5` application and sets up the main window (`ZettelkastenApp`). It connects to the `SQLite` database via `database_manager.py`. When a user interacts with the application (e.g., types in the editor, clicks `save`, selects a category), `ZettelkastenApp` handles the events, updates the `UI`, and calls the appropriate methods in `database_manager.py` to perform `CRUD` (Create, Read, Update, Delete) operations on the notes in the database. The first line of a note's content is automatically used as its title.
+The `main.py` file initializes the `Flet` application and sets up the main UI (`ZettelkastenApp`). It connects to the `SQLite` database via `database_manager.py`. When a user interacts with the application (e.g., types in the editor, clicks `save`, selects a category), `ZettelkastenApp` handles the events, updates the `UI`, and calls the appropriate methods in `database_manager.py` to perform `CRUD` (Create, Read, Update, Delete) operations on the notes in the database. The first line of a note's content is automatically used as its title.
 
-AI note generation is managed by `ai_note_generator_worker.py`, which runs in a separate `thread` to avoid freezing the `UI`. It sends the text extracted from a PDF to the `Google Gemini API` via `gemini_api_client.py` and then processes the response to create and link the notes.
+AI note generation is managed by `ai_note_generator_worker.py`. It sends the text extracted from a PDF to the `Google Gemini API` (using the `google-genai` SDK) via `gemini_api_client.py` and then processes the response to create and link the notes.
 
-The mind map visualization is managed by `mind_map_widget.py`, which uses a `force-directed graph layout` to display the notes and their connections.
+The mind map visualization is managed by `mind_map_widget.py`, which uses a `flet.canvas` to display the notes and their connections interactively.
 
 ## Screenshots
 ![](./screenshot.png)
@@ -71,7 +71,7 @@ The mind map visualization is managed by `mind_map_widget.py`, which uses a `for
 
 1.  **Start the application:**
     ```bash
-    python src/main.py
+    flet run src/main.py
     ```
 
 2.  **Basic Note Management:**
@@ -112,16 +112,15 @@ The mind map visualization is managed by `mind_map_widget.py`, which uses a `for
 ```
 Zettelkasten-AI-Notes/
 ├── src/
-│   ├── ai_note_generator_worker.py # Manages AI note generation in a separate thread
+│   ├── ai_note_generator_worker.py # Manages AI note generation logic
 │   ├── database_manager.py         # Manages all SQLite database operations
 │   ├── gemini_api_client.py        # Interfaces with the Google Gemini API
-│   ├── main.py                     # Main application entry point and GUI logic
+│   ├── main.py                     # Main application entry point and UI logic
 │   ├── note_manager.py             # Manages note-related operations (save, rename, delete, sanitize)
 │   ├── pdf_processor.py            # Extracts text content from PDF files
-│   ├── mind_map_widget.py          # The mind map visualization widget
-│   ├── dark_theme.qss              # Stylesheet for the dark theme
-│   ├── light_theme.qss             # Stylesheet for the light theme
+│   ├── mind_map_widget.py          # The mind map visualization widget using flet.canvas
 │   └── logger.py                   # A simple logger for debugging
+├── tests/                          # Unit tests
 ├── .gitignore                      # Git ignore file
 ├── LICENSE                         # Project license
 ├── README.md                       # Project overview and setup instructions
