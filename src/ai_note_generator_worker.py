@@ -4,113 +4,220 @@
 # using artificial intelligence (AI) and saves these notes to the database.
 # The process is executed in a separate thread to avoid freezing the GUI.
 
-from gemini_api_client import GeminiApiClient # For interacting with the Gemini API
+import os # For file path checks
+import threading # For thread management and cancellation event
+import traceback # For detailed error tracing
+from gemini_api_client import GeminiApiClient, GeminiApiError, GeminiAuthError, GeminiRateLimitError # For interacting with the Gemini API
 import note_manager # For note management functions (saving, title sanitization)
 import database_manager # For database operations
-from logger import log_debug # For debug logging function
+import pdf_processor # For PDF text extraction if given a file path
+from logger import log_debug, log_error # For logging functions
 from uuid import uuid4 # For generating unique IDs
 from datetime import datetime # For timestamps
 
 # The AiNoteGeneratorWorker class executes the AI note generation process in a separate thread.
 class AiNoteGeneratorWorker:
     # The __init__ method initializes the worker object.
-    # extracted_text: The text extracted from the PDF.
+    # extracted_text: The text extracted from the PDF or the path to a PDF file.
     # on_finished: Callback function triggered when notes generation completes successfully.
     # on_error: Callback function triggered when an error occurs.
-    def __init__(self, extracted_text, on_finished, on_error):
-        self.extracted_text = extracted_text # Store the text to be processed
+    def __init__(self, extracted_text, on_finished=None, on_error=None):
+        self.extracted_text = extracted_text # Store text or file path
+        self.extracted_text_or_path = extracted_text # Explicit alias
         self.on_finished = on_finished
         self.on_error = on_error
+        self._cancel_event = threading.Event() # Cancellation flag
+
+    def cancel(self):
+        """Signals the worker to cleanly cancel the ongoing generation process."""
+        self._cancel_event.set()
+
+    def is_cancelled(self):
+        """Returns True if the worker process has been cancelled."""
+        return self._cancel_event.is_set()
 
     # The run method is the main function called when the thread starts.
     # It contains the logic for AI note generation, saving, and linking.
     def run(self):
-        # Create a new DatabaseManager instance for this thread.
-        # Each thread should have its own database connection.
-        db_manager_worker = database_manager.DatabaseManager(init_tables=False)
+        db_manager_worker = None
         try:
-            gemini_client = GeminiApiClient() # Create the Gemini API client
-            # Generate Zettelkasten notes using the Gemini API
-            generated_notes = gemini_client.generate_zettelkasten_notes(self.extracted_text)
+            # Check for early cancellation
+            if self._cancel_event.is_set():
+                log_debug("DEBUG: AiNoteGeneratorWorker cancelled before start.")
+                return
 
-            if generated_notes: # If notes were successfully generated
-                # Load existing notes and their IDs for a comprehensive search
-                title_to_id = db_manager_worker.get_all_note_titles_and_ids()
-                log_debug(f"DEBUG: Initial title_to_id: {title_to_id}")
+            # 1. Resolve text content (extract from PDF if path provided, or use raw text)
+            if isinstance(self.extracted_text_or_path, str) and (
+                self.extracted_text_or_path.lower().endswith(".pdf") or os.path.isfile(self.extracted_text_or_path)
+            ):
+                text_content = pdf_processor.extract_text_from_pdf(self.extracted_text_or_path)
+            else:
+                text_content = self.extracted_text_or_path
 
-                notes_to_insert = []
-                links_to_insert = []
-                now = datetime.now().isoformat()
+            if not text_content or not str(text_content).strip():
+                raise ValueError("Input text is empty or contains no readable content.")
 
-                # Stage 1: Identify new vs existing notes
-                for note_data in generated_notes:
-                    title = note_data.get('title', 'Untitled Note')
-                    sanitized_title = note_manager.get_sanitized_title(f"# {title}")
-                    
-                    if sanitized_title in title_to_id:
-                        # Note exists, we will append to it later
-                        note_data['_final_id'] = title_to_id[sanitized_title]
-                        note_data['_is_new'] = False
-                    else:
-                        # Note is new, assign a new UUID
-                        new_id = str(uuid4())
-                        note_data['_final_id'] = new_id
-                        note_data['_is_new'] = True
-                        title_to_id[sanitized_title] = new_id # Update mapping for links
+            # Check for cancellation before expensive API calls
+            if self._cancel_event.is_set():
+                log_debug("DEBUG: AiNoteGeneratorWorker cancelled before Gemini API call.")
+                return
 
-                # Stage 2: Process insertions and updates
-                for note_data in generated_notes:
-                    final_id = note_data['_final_id']
-                    title = note_data.get('title', 'Untitled Note')
-                    content = note_data.get('content', '')
-                    category = note_data.get('general_title', 'AI Generated')
-                    
-                    full_content = f"# {title}\n\n{content}"
-                    sanitized_title = note_manager.get_sanitized_title(full_content)
+            # 2. Initialize thread-local DatabaseManager
+            db_manager_worker = database_manager.DatabaseManager(init_tables=False)
 
-                    if note_data['_is_new']:
-                        # Insert new note
-                        notes_to_insert.append(
-                            (final_id, sanitized_title, full_content, category, now, now)
-                        )
-                    else:
-                        # Append to existing note
-                        existing_note = db_manager_worker.get_note(final_id)
-                        if existing_note:
-                            existing_content = existing_note[2]
-                            updated_content = existing_content + f"\n\n## AI Eklemeleri\n\n{content}"
-                            db_manager_worker.update_note(final_id, sanitized_title, updated_content, category)
+            # 3. Initialize Gemini API Client and generate notes
+            gemini_client = GeminiApiClient()
+            generated_notes = gemini_client.generate_zettelkasten_notes(text_content)
 
-                    connections = note_data.get('connections', [])
+            # Check for cancellation after API call
+            if self._cancel_event.is_set():
+                log_debug("DEBUG: AiNoteGeneratorWorker cancelled after Gemini API call.")
+                return
+
+            if not generated_notes:
+                log_debug("DEBUG: No notes generated by Gemini API.")
+                if self.on_finished:
+                    try:
+                        self.on_finished([])
+                    except Exception as cb_err:
+                        log_error(f"Error in on_finished callback: {cb_err}")
+                return
+
+            # 4. Stage 1: Build fresh mapping of existing notes & deduplicate titles in the batch
+            title_to_id = db_manager_worker.get_all_note_titles_and_ids()
+            used_titles = set(title_to_id.keys())
+            log_debug(f"DEBUG: Initial title_to_id count: {len(title_to_id)}")
+
+            for note_data in generated_notes:
+                if not isinstance(note_data, dict):
+                    continue
+
+                raw_title = note_data.get('title', 'Untitled Note')
+                sanitized_title = note_manager.get_sanitized_title(f"# {raw_title}")
+
+                # Disambiguate duplicate titles to preserve Zettelkasten atomicity
+                if sanitized_title in used_titles:
+                    counter = 2
+                    disambiguated = f"{sanitized_title} ({counter})"
+                    while disambiguated in used_titles:
+                        counter += 1
+                        disambiguated = f"{sanitized_title} ({counter})"
+                    final_title = disambiguated
+                else:
+                    final_title = sanitized_title
+
+                used_titles.add(final_title)
+                new_id = str(uuid4())
+
+                note_data['_final_id'] = new_id
+                note_data['_final_title'] = final_title
+                note_data['_is_new'] = True
+
+                title_to_id[final_title] = new_id
+                if sanitized_title not in title_to_id:
+                    title_to_id[sanitized_title] = new_id
+                if raw_title not in title_to_id:
+                    title_to_id[raw_title] = new_id
+
+            # 5. Stage 2: Prepare batch insertion records and connections
+            notes_to_insert = []
+            links_to_insert = []
+            now = datetime.now().isoformat()
+
+            for note_data in generated_notes:
+                if not isinstance(note_data, dict):
+                    continue
+
+                final_id = note_data['_final_id']
+                final_title = note_data.get('_final_title', note_data.get('title', 'Untitled Note'))
+                content = note_data.get('content', '')
+                category = note_data.get('general_title', 'AI Generated')
+
+                full_content = f"# {final_title}\n\n{content}"
+
+                notes_to_insert.append(
+                    (final_id, final_title, full_content, category, now, now)
+                )
+
+                connections = note_data.get('connections', [])
+                if isinstance(connections, list):
                     for target_title_raw in connections:
+                        if not isinstance(target_title_raw, str):
+                            continue
                         sanitized_target_title = note_manager.get_sanitized_title(target_title_raw)
-                        target_id = title_to_id.get(sanitized_target_title)
-                        if target_id:
-                            links_to_insert.append((final_id, target_id))
-                        else:
-                            log_debug(f"DEBUG: Could not find target_id for '{sanitized_target_title}'. Link not inserted.")
+                        target_id = title_to_id.get(sanitized_target_title) or title_to_id.get(target_title_raw)
+                        # Avoid self-referential links and ensure target exists
+                        if target_id and target_id != final_id:
+                            link_pair = (final_id, target_id)
+                            if link_pair not in links_to_insert:
+                                links_to_insert.append(link_pair)
+                        elif not target_id:
+                            log_debug(f"DEBUG: Could not find target_id for '{target_title_raw}'. Link not inserted.")
 
-                # Stage 3: Bulk database operations for new notes
+            # Check for cancellation before DB commit
+            if self._cancel_event.is_set():
+                log_debug("DEBUG: AiNoteGeneratorWorker cancelled before database commit.")
+                return
+
+            # 6. Stage 3: Atomic database insertion with rollback
+            inserted_ids = []
+            try:
                 if notes_to_insert:
                     db_manager_worker.bulk_insert_notes(notes_to_insert)
+                    inserted_ids = [n[0] for n in notes_to_insert]
                     log_debug(f"DEBUG: Bulk inserted {len(notes_to_insert)} notes.")
 
                 if links_to_insert:
                     db_manager_worker.bulk_insert_links(links_to_insert)
                     log_debug(f"DEBUG: Bulk inserted {len(links_to_insert)} links.")
+            except Exception as db_err:
+                # Rollback partial note insertions if subsequent batch operations fail
+                if inserted_ids:
+                    try:
+                        cursor = db_manager_worker.conn.cursor()
+                        cursor.executemany("DELETE FROM notes WHERE id = ?", [(nid,) for nid in inserted_ids])
+                        db_manager_worker.conn.commit()
+                        log_debug(f"DEBUG: Rolled back {len(inserted_ids)} partial notes on error.")
+                    except Exception as rollback_err:
+                        log_error(f"Error during rollback cleanup: {rollback_err}")
+                raise db_err
 
-                if self.on_finished:
+            # 7. Safe callback dispatch
+            if self.on_finished:
+                try:
                     self.on_finished(generated_notes)
-            else:
-                if self.on_finished:
-                    self.on_finished([])
-        except ValueError as ve:
+                except Exception as cb_err:
+                    log_error(f"Error in on_finished callback: {cb_err}\n{traceback.format_exc()}")
+
+        except (GeminiAuthError, GeminiRateLimitError, GeminiApiError) as ge:
+            err_msg = str(ge)
+            log_error(f"AiNoteGeneratorWorker Gemini API error: {err_msg}")
             if self.on_error:
-                self.on_error(f"API Key Error: {str(ve)}")
+                try:
+                    self.on_error(err_msg)
+                except Exception as cb_err:
+                    log_error(f"Error in on_error callback: {cb_err}")
+        except (ValueError, FileNotFoundError) as ve:
+            err_msg = str(ve)
+            log_error(f"AiNoteGeneratorWorker validation error: {err_msg}")
+            if self.on_error:
+                try:
+                    self.on_error(err_msg)
+                except Exception as cb_err:
+                    log_error(f"Error in on_error callback: {cb_err}")
         except Exception as e:
+            err_msg = f"An error occurred during AI note generation: {e}"
+            log_error(f"AiNoteGeneratorWorker unhandled exception: {err_msg}\n{traceback.format_exc()}")
             if self.on_error:
-                self.on_error(f"An error occurred during AI note generation: {e}")
+                try:
+                    self.on_error(err_msg)
+                except Exception as cb_err:
+                    log_error(f"Error in on_error callback: {cb_err}")
         finally:
             if db_manager_worker:
-                db_manager_worker.close_connection()
+                try:
+                    db_manager_worker.close_connection()
+                except Exception as close_err:
+                    log_error(f"Error closing DB connection: {close_err}")
+
 

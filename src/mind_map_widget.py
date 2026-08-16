@@ -19,10 +19,9 @@ class MindMapWidget(ft.Container):
         self.node_positions = {} # Persisted coordinates {note_id: {'pos': ..., 'rect': ..., 'size': ...}}
         self._last_nodes_set = None
         self._last_links_set = None
+        self._last_nodes_fingerprint = None
         
-        # Dimensions of the widget view
-        self.width = 350
-        self.height = 350
+        self.expand = True
         self.clip_behavior = ft.ClipBehavior.HARD_EDGE
         self.bgcolor = ft.Colors.TRANSPARENT
         
@@ -43,10 +42,19 @@ class MindMapWidget(ft.Container):
             content=self.gd,
             pan_enabled=True,
             scale_enabled=True,
-            constrained=False
+            constrained=False,
+            expand=True
         )
         
         self.content = self.viewer
+
+    # Explicit cache invalidation method
+    def invalidate_cache(self):
+        """Invalidates cached node positions, bounding boxes, and layout fingerprints."""
+        self.node_positions.clear()
+        self._last_nodes_set = None
+        self._last_links_set = None
+        self._last_nodes_fingerprint = None
         
     # The update_map method rebuilds the layout and draws the map.
     # all_notes_metadata: A list of tuples containing (note_id, title, category)
@@ -54,7 +62,7 @@ class MindMapWidget(ft.Container):
     # current_note_id: The ID of the currently selected note.
     def update_map(self, all_notes_metadata, all_links, current_note_id=None):
         self.notes.clear()
-        self.links = all_links
+        self.links = list(all_links) if all_links is not None else []
         self.current_note_id = current_note_id
         
         # Initialize note metadata
@@ -64,26 +72,31 @@ class MindMapWidget(ft.Container):
         self._layout_nodes()
         self._draw_map()
         
-    # The _layout_nodes method computes node coordinates using PyGraphviz layout.
+    # The _layout_nodes method computes node coordinates using PyGraphviz layout or fallback grid.
     def _layout_nodes(self):
         if not self.notes:
+            self.canvas.shapes = []
+            try:
+                self.canvas.update()
+            except Exception:
+                pass
             return
 
-        current_nodes_set = set(self.notes.keys())
+        current_nodes_fingerprint = {(nid, data['title']) for nid, data in self.notes.items()}
         current_links_set = set(self.links)
 
-        # Check if node topology or links changed
-        if self._last_nodes_set is not None and self._last_links_set is not None:
-            if self._last_nodes_set == current_nodes_set and self._last_links_set == current_links_set:
-                if self.node_positions:
+        # Check if node topology, titles, or links changed
+        if self._last_nodes_fingerprint is not None and self._last_links_set is not None:
+            if self._last_nodes_fingerprint == current_nodes_fingerprint and self._last_links_set == current_links_set:
+                if self.node_positions and all(nid in self.node_positions for nid in self.notes):
                     for note_id in self.notes:
-                        if note_id in self.node_positions:
-                            self.notes[note_id]['pos'] = self.node_positions[note_id]['pos']
-                            self.notes[note_id]['rect'] = self.node_positions[note_id]['rect']
-                            self.notes[note_id]['size'] = self.node_positions[note_id]['size']
+                        self.notes[note_id]['pos'] = self.node_positions[note_id]['pos']
+                        self.notes[note_id]['rect'] = self.node_positions[note_id]['rect']
+                        self.notes[note_id]['size'] = self.node_positions[note_id]['size']
                     return
 
-        self._last_nodes_set = current_nodes_set
+        self._last_nodes_fingerprint = current_nodes_fingerprint
+        self._last_nodes_set = set(self.notes.keys())
         self._last_links_set = current_links_set
 
         # 1. Pre-calculate node dimensions and store them
@@ -98,7 +111,7 @@ class MindMapWidget(ft.Container):
         try:
             import pygraphviz as pgv
             # Configure layout spacing and direction (Left to Right)
-            G = pgv.AGraph(directed=True, strict=True, rankdir='LR', nodesep='0.5', ranksep='1.0')
+            G = pgv.AGraph(directed=True, strict=True, rankdir='LR', nodesep='0.6', ranksep='1.2')
             
             for note_id, data in self.notes.items():
                 node_width, node_height = data['size']
@@ -124,29 +137,66 @@ class MindMapWidget(ft.Container):
                     pass
         except Exception as e:
             log_debug(f"PyGraphviz layout failed: {e}, using simple grid layout.")
-            # Fallback simple layout if pgv fails
-            nodes_list = list(self.notes.keys())
-            nodes_per_row = int(len(nodes_list)**0.5) + 1
-            for i, node_id in enumerate(nodes_list):
-                row = i // nodes_per_row
-                col = i % nodes_per_row
-                raw_positions[node_id] = (col * 150, row * 100)
+            raw_positions.clear()
+
+        # Position any unpositioned/disconnected nodes with collision-free spacing
+        missing_nodes = [nid for nid in self.notes.keys() if nid not in raw_positions]
+        if missing_nodes:
+            max_node_width = max((self.notes[nid]['size'][0] for nid in self.notes), default=110)
+            max_node_height = max((self.notes[nid]['size'][1] for nid in self.notes), default=40)
+            col_step = max_node_width + 50
+            row_step = max_node_height + 45
+            
+            # Find connected components within missing nodes
+            adj = {nid: set() for nid in missing_nodes}
+            for s, t in self.links:
+                if s in adj and t in adj:
+                    adj[s].add(t)
+                    adj[t].add(s)
+            
+            visited = set()
+            components = []
+            for nid in missing_nodes:
+                if nid not in visited:
+                    comp = []
+                    queue = [nid]
+                    visited.add(nid)
+                    while queue:
+                        curr = queue.pop(0)
+                        comp.append(curr)
+                        for neighbor in adj[curr]:
+                            if neighbor not in visited:
+                                visited.add(neighbor)
+                                queue.append(neighbor)
+                    components.append(comp)
+
+            base_y = max((y for _, y in raw_positions.values()), default=0.0) + row_step if raw_positions else 0.0
+            current_y = base_y
+            
+            # Lay out connected clusters first
+            for comp in [c for c in components if len(c) > 1]:
+                comp_cols = max(1, int(math.ceil(math.sqrt(len(comp)))))
+                for i, node_id in enumerate(comp):
+                    row = i // comp_cols
+                    col = i % comp_cols
+                    raw_positions[node_id] = (col * col_step, current_y + row * row_step)
+                comp_rows = (len(comp) + comp_cols - 1) // comp_cols
+                current_y += (comp_rows + 0.5) * row_step
+                
+            # Lay out isolated singletons in a grid
+            singletons = [c[0] for c in components if len(c) == 1]
+            if singletons:
+                sing_cols = max(1, int(math.ceil(math.sqrt(len(singletons)))))
+                for i, node_id in enumerate(singletons):
+                    row = i // sing_cols
+                    col = i % sing_cols
+                    raw_positions[node_id] = (col * col_step, current_y + row * row_step)
 
         # 6. Find raw bounding box and shift coordinates to fit inside InteractiveViewer
-        min_x = float('inf')
-        max_x = float('-inf')
-        min_y = float('inf')
-        max_y = float('-inf')
-
-        for note_id, (x, y) in raw_positions.items():
-            w, h = self.notes[note_id]['size']
-            min_x = min(min_x, x - w/2)
-            max_x = max(max_x, x + w/2)
-            min_y = min(min_y, y - h/2)
-            max_y = max(max_y, y + h/2)
-
-        if min_x == float('inf'):
-            min_x, max_x, min_y, max_y = 0, 0, 0, 0
+        min_x = min((raw_positions[nid][0] - self.notes[nid]['size'][0] / 2 for nid in self.notes if nid in raw_positions), default=0.0)
+        max_x = max((raw_positions[nid][0] + self.notes[nid]['size'][0] / 2 for nid in self.notes if nid in raw_positions), default=0.0)
+        min_y = min((raw_positions[nid][1] - self.notes[nid]['size'][1] / 2 for nid in self.notes if nid in raw_positions), default=0.0)
+        max_y = max((raw_positions[nid][1] + self.notes[nid]['size'][1] / 2 for nid in self.notes if nid in raw_positions), default=0.0)
 
         padding = 50
         total_width = max(350, max_x - min_x + 2 * padding)
@@ -160,6 +210,8 @@ class MindMapWidget(ft.Container):
         self.node_positions.clear()
 
         for note_id, (raw_x, raw_y) in raw_positions.items():
+            if note_id not in self.notes:
+                continue
             mapped_x = (raw_x - min_x) + padding
             mapped_y = (raw_y - min_y) + padding
 
@@ -199,8 +251,9 @@ class MindMapWidget(ft.Container):
                     continue
                     
                 target_w, target_h = self.notes[target_id]['size']
-                # Stop edge line at target node border
+                # Stop edge line at target node border, clamped to prevent inverted arrowheads
                 radius = min(target_w, target_h) / 2 + 5
+                radius = min(radius, max(0.0, dist - 5))
                 
                 adj_end_x = end_x - (dx / dist) * radius
                 adj_end_y = end_y - (dy / dist) * radius
@@ -255,22 +308,37 @@ class MindMapWidget(ft.Container):
             ))
             
         self.canvas.shapes = shapes
-        self.canvas.update()
+        try:
+            self.canvas.update()
+        except Exception:
+            pass
         
     # The handle_tap_down method checks if any node is clicked in the canvas space.
     def handle_tap_down(self, e: ft.TapEvent):
         try:
-            click_x = e.local_position.x
-            click_y = e.local_position.y
-        except AttributeError:
-            # Fallback for older Flet versions
-            click_x = getattr(e, 'local_x', 0)
-            click_y = getattr(e, 'local_y', 0)
+            if hasattr(e, 'local_position') and e.local_position is not None:
+                click_x = float(e.local_position.x)
+                click_y = float(e.local_position.y)
+            elif hasattr(e, 'local_x') and e.local_x is not None:
+                click_x = float(e.local_x)
+                click_y = float(getattr(e, 'local_y', 0.0))
+            elif hasattr(e, 'global_position') and e.global_position is not None:
+                click_x = float(e.global_position.x)
+                click_y = float(e.global_position.y)
+            else:
+                click_x = float(getattr(e, 'local_x', 0.0))
+                click_y = float(getattr(e, 'local_y', 0.0))
+        except Exception as ex:
+            log_debug(f"Tap event position extraction fallback: {ex}")
+            click_x = float(getattr(e, 'local_x', 0.0))
+            click_y = float(getattr(e, 'local_y', 0.0))
         
         for note_id, data in self.notes.items():
-            rx, ry, rx2, ry2 = data['rect']
+            rect = data.get('rect')
+            if not rect:
+                continue
+            rx, ry, rx2, ry2 = rect
             if rx <= click_x <= rx2 and ry <= click_y <= ry2:
-                self.current_note_id = note_id
-                self.on_note_selected(note_id)
-                self._draw_map()
+                if self.on_note_selected and callable(self.on_note_selected):
+                    self.on_note_selected(note_id)
                 break

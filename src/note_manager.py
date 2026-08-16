@@ -12,15 +12,25 @@ from logger import log_debug # For debug logging function
 def generate_unique_id():
     return str(uuid.uuid4()) # Create a UUID (Universally Unique Identifier) and convert it to a string
 
-# The get_sanitized_title function extracts a cleaned title from the first line of the note content.
+# The get_sanitized_title function extracts a cleaned title from the first non-empty line of the note content.
 # It removes Markdown headings, content in parentheses, and other Markdown formatting characters.
 def get_sanitized_title(content):
-    first_line = content.split('\n')[0].strip() # Get the first line of the content and clean up whitespace
-    if not first_line:
-        return "Untitled Note" # Return a default title if the first line is empty
+    if not content:
+        return "Untitled Note" # Return a default title if the content is empty
+
+    # Extract the first non-empty line
+    first_non_empty_line = ""
+    for line in content.split('\n'):
+        stripped = line.strip()
+        if stripped:
+            first_non_empty_line = stripped
+            break
+
+    if not first_non_empty_line:
+        return "Untitled Note" # Return default if all lines are empty
 
     # 1. Remove Markdown heading syntax (e.g., #, ##, etc.) from the beginning of the line
-    sanitized_title = re.sub(r'^#+\s*', '', first_line)
+    sanitized_title = re.sub(r'^#+\s*', '', first_non_empty_line)
 
     # Remove bold/italic markers
     sanitized_title = re.sub(r'(\*\*|__|\*|_)', '', sanitized_title)
@@ -37,11 +47,11 @@ def get_sanitized_title(content):
     # Remove leading/trailing whitespace that may have occurred after cleaning
     sanitized_title = sanitized_title.strip()
 
-    return sanitized_title
+    return sanitized_title if sanitized_title else "Untitled Note"
 
 # The save_note function saves or updates a note in the database.
 # db_manager: The database manager object.
-# note_id: The ID of the note to be updated (if None, a new note is created).
+# note_id: The ID of the note to be updated (if None or empty, a new note is created).
 # note_content: The content of the note.
 # category_path: The category of the note.
 def save_note(db_manager, note_id, note_content, category_path=""):
@@ -50,22 +60,15 @@ def save_note(db_manager, note_id, note_content, category_path=""):
     if not sanitized_title: # If the title is empty after cleaning
         sanitized_title = "Untitled Note" # Assign a default title
 
-    # Check if there is an existing note with this title
-    existing_note_id = db_manager.get_note_id_by_title(sanitized_title) # Existing note ID by title
-
-    if existing_note_id: # If an existing note is found
-        log_debug(f"DEBUG: Found existing note with sanitized title '{sanitized_title}' and ID '{existing_note_id}'. Updating instead of creating new.")
-        # Update the existing note
-        db_manager.update_note(existing_note_id, sanitized_title, note_content, category_path)
-        return existing_note_id, sanitized_title # Return the existing note ID and title
-    elif note_id is None: # If there is no existing note and no ID is provided, create a new note
+    if note_id:
+        # If note_id is provided (truthy string), update the specific note
+        db_manager.update_note(note_id, sanitized_title, note_content, category_path)
+        return note_id, sanitized_title # Return the updated note ID and title
+    else:
+        # If note_id is None or empty, generate a new UUID4 and insert
         new_note_id = generate_unique_id() # Create a new unique ID
         db_manager.insert_note(new_note_id, sanitized_title, note_content, category_path) # Add the new note
         return new_note_id, sanitized_title # Return the new note ID and title
-    else:
-        # If note_id is provided, update the specific note (this path is for manual edits of existing notes)
-        db_manager.update_note(note_id, sanitized_title, note_content, category_path)
-        return note_id, sanitized_title # Return the updated note ID and title
 
 # The delete_note function deletes a specific note from the database.
 # db_manager: The database manager object.

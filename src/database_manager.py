@@ -16,9 +16,11 @@ DATABASE_FILE = os.path.join("db", "notes.db")
 # The DatabaseManager class manages the SQLite database connection and operations.
 class DatabaseManager:
     # The __init__ method establishes the database connection and creates the necessary tables.
-    def __init__(self, init_tables=True):
-        # Ensure the 'db' folder exists, otherwise create it
-        os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True)
+    def __init__(self, db_path=None, init_tables=True):
+        self.db_path = db_path if db_path is not None else DATABASE_FILE
+        dir_name = os.path.dirname(self.db_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         self._local = threading.local()
         if init_tables:
             self.create_notes_table() # Create the notes table
@@ -29,21 +31,27 @@ class DatabaseManager:
     def conn(self):
         """Returns a thread-local SQLite connection for thread safety."""
         if not hasattr(self._local, 'conn') or self._local.conn is None:
-            connection = sqlite3.connect(DATABASE_FILE)
-            connection.execute("PRAGMA foreign_keys = ON")
+            connection = sqlite3.connect(self.db_path)
+            connection.execute("PRAGMA journal_mode = WAL;")
+            connection.execute("PRAGMA foreign_keys = ON;")
+            connection.execute("PRAGMA busy_timeout = 5000;")
             self._local.conn = connection
         return self._local.conn
 
+    def get_connection(self):
+        """Returns the thread-local database connection."""
+        return self.conn
+
     # The _create_settings_table method creates a table to store application settings.
     def _create_settings_table(self):
-        cursor = self.conn.cursor() # Get the database cursor
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY, -- > The setting key (unique)
-                value TEXT -- > The setting value
-            )
-        """)
-        self.conn.commit() # Save the changes
+        with self.get_connection() as conn:
+            cursor = conn.cursor() # Get the database cursor
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY, -- > The setting key (unique)
+                    value TEXT -- > The setting value
+                )
+            """)
 
     def get_setting(self, key):
         cursor = self.conn.cursor()
@@ -52,51 +60,54 @@ class DatabaseManager:
         return result[0] if result else None
 
     def set_setting(self, key, value):
-        cursor = self.conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-        self.conn.commit()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
     # The create_notes_table method creates a table to store note information.
     def create_notes_table(self):
-        cursor = self.conn.cursor() # Get the database cursor
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS notes (
-                id TEXT PRIMARY KEY, -- > The unique ID of the note
-                title TEXT NOT NULL, -- > The title of the note (cannot be empty)
-                content TEXT, -- > The content of the note
-                category TEXT DEFAULT '', -- > The category of the note (default empty)
-                created_at TEXT NOT NULL, -- > The creation time
-                updated_at TEXT NOT NULL -- > The last update time
-            )
-        """)
-        self.conn.commit() # Save the changes
+        with self.get_connection() as conn:
+            cursor = conn.cursor() # Get the database cursor
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS notes (
+                    id TEXT PRIMARY KEY, -- > The unique ID of the note
+                    title TEXT NOT NULL, -- > The title of the note (cannot be empty)
+                    content TEXT, -- > The content of the note
+                    category TEXT DEFAULT '', -- > The category of the note (default empty)
+                    created_at TEXT NOT NULL, -- > The creation time
+                    updated_at TEXT NOT NULL -- > The last update time
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_category ON notes(category);")
 
     # The create_note_links_table method creates a table to store the links between notes.
     def create_note_links_table(self):
-        cursor = self.conn.cursor() # Get the database cursor
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS note_links (
-                source_note_id TEXT NOT NULL, -- > The ID of the source note
-                target_note_id TEXT NOT NULL, -- > The ID of the target note
-                PRIMARY KEY (source_note_id, target_note_id), -- > The combination of the two IDs must be unique
-                FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE CASCADE, -- > If the source note is deleted, the link is also deleted
-                FOREIGN KEY (target_note_id) REFERENCES notes(id) ON DELETE CASCADE -- > If the target note is deleted, the link is also deleted
-            )
-        """)
-        self.conn.commit() # Save the changes
+        with self.get_connection() as conn:
+            cursor = conn.cursor() # Get the database cursor
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS note_links (
+                    source_note_id TEXT NOT NULL, -- > The ID of the source note
+                    target_note_id TEXT NOT NULL, -- > The ID of the target note
+                    PRIMARY KEY (source_note_id, target_note_id), -- > The combination of the two IDs must be unique
+                    FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE CASCADE, -- > If the source note is deleted, the link is also deleted
+                    FOREIGN KEY (target_note_id) REFERENCES notes(id) ON DELETE CASCADE -- > If the target note is deleted, the link is also deleted
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_source ON note_links(source_note_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_target ON note_links(target_note_id);")
 
     # The insert_note_link method adds a link between two notes.
     # source_note_id: The ID of the note where the link starts.
     # target_note_id: The ID of the note where the link ends.
     def insert_note_link(self, source_note_id, target_note_id):
-        cursor = self.conn.cursor() # Get the database cursor
         try:
-            cursor.execute("""
-                INSERT INTO note_links (source_note_id, target_note_id)
-                VALUES (?, ?)
-            """, (source_note_id, target_note_id)) # Add the link
-            self.conn.commit() # Save the changes
-            return True # Indicate success
+            with self.get_connection() as conn:
+                cursor = conn.cursor() # Get the database cursor
+                cursor.execute("""
+                    INSERT INTO note_links (source_note_id, target_note_id)
+                    VALUES (?, ?)
+                """, (source_note_id, target_note_id)) # Add the link
+                return True # Indicate success
         except sqlite3.IntegrityError:
             # If the link already exists (due to the PRIMARY KEY constraint)
             return False # Indicate failure
@@ -126,12 +137,18 @@ class DatabaseManager:
     # source_note_id: The ID of the source note.
     # target_note_id: The ID of the target note.
     def delete_note_link(self, source_note_id, target_note_id):
-        cursor = self.conn.cursor() # Get the database cursor
-        cursor.execute("""
-            DELETE FROM note_links WHERE source_note_id = ? AND target_note_id = ?
-        """, (source_note_id, target_note_id)) # Delete the link
-        self.conn.commit() # Save the changes
-        return cursor.rowcount > 0 # Return True if a link was deleted, otherwise False
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor() # Get the database cursor
+                cursor.execute("""
+                    DELETE FROM note_links
+                    WHERE (source_note_id = ? AND target_note_id = ?)
+                       OR (source_note_id = ? AND target_note_id = ?)
+                """, (source_note_id, target_note_id, target_note_id, source_note_id)) # Delete the link bidirectionally
+                return cursor.rowcount > 0 # Return True if a link was deleted, otherwise False
+        except sqlite3.Error as e:
+            log_error(f"Database error during note link deletion: {e}")
+            return False
 
     # The get_note_id_by_title method returns the ID of a note based on its title.
     # title: The title of the note to search for.
@@ -147,13 +164,13 @@ class DatabaseManager:
     # content: The content of the note.
     # category: The category of the note (optional).
     def insert_note(self, note_id, title, content, category=""):
-        cursor = self.conn.cursor() # Get the database cursor
         now = datetime.now().isoformat() # Get the current time in ISO format
-        cursor.execute("""
-            INSERT INTO notes (id, title, content, category, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (note_id, title, content, category, now, now)) # Add the note
-        self.conn.commit() # Save the changes
+        with self.get_connection() as conn:
+            cursor = conn.cursor() # Get the database cursor
+            cursor.execute("""
+                INSERT INTO notes (id, title, content, category, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (note_id, title, content, category, now, now)) # Add the note
 
     # The update_note method updates an existing note.
     # note_id: The ID of the note to be updated.
@@ -161,23 +178,24 @@ class DatabaseManager:
     # content: The new content.
     # category: The new category (optional).
     def update_note(self, note_id, title, content, category=""):
-        cursor = self.conn.cursor() # Get the database cursor
         now = datetime.now().isoformat() # Get the current time in ISO format
-        cursor.execute("""
-            UPDATE notes
-            SET title = ?, content = ?, category = ?, updated_at = ?
-            WHERE id = ?
-        """, (title, content, category, now, note_id)) # Update the note
-        self.conn.commit() # Save the changes
+        with self.get_connection() as conn:
+            cursor = conn.cursor() # Get the database cursor
+            cursor.execute("""
+                UPDATE notes
+                SET title = ?, content = ?, category = ?, updated_at = ?
+                WHERE id = ?
+            """, (title, content, category, now, note_id)) # Update the note
 
     # The delete_note method deletes a specific note from the database.
     # note_id: The ID of the note to be deleted.
     def delete_note(self, note_id):
         try:
-            cursor = self.conn.cursor() # Get the database cursor
-            cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,)) # Delete the note
-            self.conn.commit() # Save the changes
-            return True  # Indicate success
+            with self.get_connection() as conn:
+                cursor = conn.cursor() # Get the database cursor
+                cursor.execute("DELETE FROM note_links WHERE source_note_id = ? OR target_note_id = ?", (note_id, note_id))
+                cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,)) # Delete the note
+                return True # Indicate success
         except sqlite3.Error as e:
             log_error(f"Database error during note deletion: {e}") # Log the error message
             return False # Indicate failure
@@ -186,13 +204,22 @@ class DatabaseManager:
     # category_name: The name of the category to be deleted.
     def delete_category(self, category_name):
         try:
-            cursor = self.conn.cursor() # Get the database cursor
-            cursor.execute("DELETE FROM notes WHERE category = ?", (category_name,)) # Delete the notes belonging to the category
-            self.conn.commit() # Save the changes
-            return True  # Indicate success
+            with self.get_connection() as conn:
+                cursor = conn.cursor() # Get the database cursor
+                cursor.execute("SELECT id FROM notes WHERE category = ?", (category_name,))
+                note_ids = [row[0] for row in cursor.fetchall()]
+                if note_ids:
+                    placeholders = ', '.join(['?'] * len(note_ids))
+                    cursor.execute(f"""
+                        DELETE FROM note_links
+                        WHERE source_note_id IN ({placeholders})
+                           OR target_note_id IN ({placeholders})
+                    """, note_ids + note_ids)
+                cursor.execute("DELETE FROM notes WHERE category = ?", (category_name,)) # Delete the notes belonging to the category
+                return True # Indicate success
         except sqlite3.Error as e:
             log_error(f"Database error during category deletion: {e}") # Log the error message
-            return False  # Indicate failure
+            return False # Indicate failure
 
     # The get_note method returns all data (ID, title, content, category) of a specific note.
     # note_id: The ID of the note to be retrieved.
@@ -241,21 +268,19 @@ class DatabaseManager:
         if not title:
             title = "Untitled Note" # Assign a default title if the title is empty
 
-        if note_id:
-            # Update the existing note
-            cursor = self.conn.cursor() # Get the database cursor
-            cursor.execute("UPDATE notes SET title = ?, content = ?, category = ?, updated_at = ? WHERE id = ?",
-                           (title, note_content, category, now, note_id)) # Update the note
-            self.conn.commit() # Save the changes
-            return note_id, title # Return the note ID and title
-        else:
-            # Create a new note
-            new_note_id = str(uuid4()) # Create a new unique ID
-            cursor = self.conn.cursor() # Get the database cursor
-            cursor.execute("INSERT INTO notes (id, title, content, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                           (new_note_id, title, note_content, category, now, now)) # Add the new note
-            self.conn.commit() # Save the changes
-            return new_note_id, title # Return the new note ID and title
+        with self.get_connection() as conn:
+            cursor = conn.cursor() # Get the database cursor
+            if note_id:
+                # Update the existing note
+                cursor.execute("UPDATE notes SET title = ?, content = ?, category = ?, updated_at = ? WHERE id = ?",
+                               (title, note_content, category, now, note_id)) # Update the note
+                return note_id, title # Return the note ID and title
+            else:
+                # Create a new note
+                new_note_id = str(uuid4()) # Create a new unique ID
+                cursor.execute("INSERT INTO notes (id, title, content, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                               (new_note_id, title, note_content, category, now, now)) # Add the new note
+                return new_note_id, title # Return the new note ID and title
 
     # The rename_note method updates the title of a note.
     # note_id: The ID of the note to be renamed.
@@ -263,11 +288,11 @@ class DatabaseManager:
     # category: The category of the note (currently not used but kept for compatibility).
     def rename_note(self, note_id, new_title, category=""):
         now = datetime.now().isoformat() # Get the current time in ISO format
-        cursor = self.conn.cursor() # Get the database cursor
-        cursor.execute("UPDATE notes SET title = ?, updated_at = ? WHERE id = ?",
-                       (new_title, now, note_id)) # Update the title of the note
-        self.conn.commit() # Save the changes
-        return True, new_title # Indicate success and return the new title
+        with self.get_connection() as conn:
+            cursor = conn.cursor() # Get the database cursor
+            cursor.execute("UPDATE notes SET title = ?, updated_at = ? WHERE id = ?",
+                           (new_title, now, note_id)) # Update the title of the note
+            return True, new_title # Indicate success and return the new title
 
     # The get_all_note_titles_and_ids method returns the titles and IDs of all notes as a dictionary.
     def get_all_note_titles_and_ids(self):
@@ -282,27 +307,27 @@ class DatabaseManager:
         return cursor.fetchall()
 
     def bulk_insert_notes(self, notes_data):
-        cursor = self.conn.cursor()
         try:
-            cursor.executemany("""
-                INSERT INTO notes (id, title, content, category, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, notes_data)
-            self.conn.commit()
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.executemany("""
+                    INSERT INTO notes (id, title, content, category, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, notes_data)
         except sqlite3.Error as e:
-            self.conn.rollback()
+            log_error(f"Database error during bulk insert notes: {e}")
             raise e
 
     def bulk_insert_links(self, links_data):
-        cursor = self.conn.cursor()
         try:
-            cursor.executemany("""
-                INSERT OR IGNORE INTO note_links (source_note_id, target_note_id)
-                VALUES (?, ?)
-            """, links_data)
-            self.conn.commit()
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.executemany("""
+                    INSERT OR IGNORE INTO note_links (source_note_id, target_note_id)
+                    VALUES (?, ?)
+                """, links_data)
         except sqlite3.Error as e:
-            self.conn.rollback()
+            log_error(f"Database error during bulk insert links: {e}")
             raise e
 
     # The close_connection method closes the thread-local database connection.

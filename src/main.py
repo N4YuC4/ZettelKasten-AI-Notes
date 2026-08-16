@@ -50,6 +50,11 @@ def main(page: ft.Page):
         page.snack_bar.open = True
         page.update()
 
+    # Helper to close modal dialogs safely
+    def close_dialog(dlg):
+        dlg.open = False
+        page.update()
+
     # Callback when a note is selected in the Zihin Haritası
     def handle_map_note_selected(note_id):
         log_debug(f"DEBUG: Note selected from Mind Map: {note_id}")
@@ -117,7 +122,12 @@ def main(page: ft.Page):
 
     # REUSABLE MODAL DIALOGS
     delete_dialog = ft.AlertDialog(title=ft.Text("Delete Note"), content=ft.Text(""), actions=[], actions_alignment=ft.MainAxisAlignment.END)
-    delete_cat_dialog = ft.AlertDialog(title=ft.Text("Delete Category"), content=ft.Text(""), actions=[], actions_alignment=ft.MainAxisAlignment.END)
+    delete_cat_dialog = ft.AlertDialog(
+        title=ft.Text("Kategoriyi Sil"),
+        content=ft.Text("Bu kategoriyi ve içerdiği tüm notları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz."),
+        actions=[],
+        actions_alignment=ft.MainAxisAlignment.END
+    )
     unlink_dialog = ft.AlertDialog(title=ft.Text("Unlink Note"), content=ft.Text(""), actions=[], actions_alignment=ft.MainAxisAlignment.END)
     error_dialog = ft.AlertDialog(title=ft.Text("Error"), content=ft.Text(""), actions=[], actions_alignment=ft.MainAxisAlignment.END)
     unsaved_dialog = ft.AlertDialog(title=ft.Text("Unsaved Changes"), content=ft.Text("You have unsaved changes. Do you want to save them?"), actions=[], actions_alignment=ft.MainAxisAlignment.END)
@@ -145,15 +155,12 @@ def main(page: ft.Page):
         can_reveal_password=True,
         border_radius=8
     )
-    
-
-
-
 
     # Create New Category Dialog
     new_category_field = ft.TextField(
         label="Category Name",
-        border_radius=8
+        border_radius=8,
+        on_submit=lambda e: save_new_category(e)
     )
     
     def save_new_category(e):
@@ -163,17 +170,19 @@ def main(page: ft.Page):
             return
             
         all_notes_metadata, all_categories = note_manager.load_all_notes_metadata(db_manager)
-        if category_name in all_categories:
+        existing_options = {opt.key for opt in category_dropdown.options if opt.key} | set(all_categories)
+        if category_name in existing_options:
             show_snack_bar(f"Category '{category_name}' already exists.", color=ft.Colors.ERROR)
             return
             
-        # Create a new empty note under this category to initialize it
-        new_note()
         nonlocal current_note_category
         current_note_category = category_name
-        editor_textfield.value = f"# New note in {category_name}\n\nStart writing your note here..."
-        save_note_action(None)
         
+        # Reload categories with the new category selected, keeping editor content intact
+        load_categories(select_category=category_name)
+        load_notes(category_to_select=category_name)
+        
+        new_category_field.value = ""
         new_category_dialog.open = False
         page.update()
         show_snack_bar(f"Category '{category_name}' created successfully.")
@@ -183,7 +192,7 @@ def main(page: ft.Page):
         content=new_category_field,
         actions=[
             ft.TextButton("Create", on_click=save_new_category),
-            ft.TextButton("Cancel", on_click=lambda e: setattr(new_category_dialog, 'open', False) or page.update())
+            ft.TextButton("Cancel", on_click=lambda e: close_dialog(new_category_dialog))
         ],
         actions_alignment=ft.MainAxisAlignment.END
     )
@@ -192,7 +201,8 @@ def main(page: ft.Page):
     # Rename Note Dialog
     rename_note_field = ft.TextField(
         label="New Note Title",
-        border_radius=8
+        border_radius=8,
+        on_submit=lambda e: save_rename_note(e)
     )
     rename_target_id = None
     
@@ -202,21 +212,43 @@ def main(page: ft.Page):
             show_snack_bar("Note title cannot be empty.", color=ft.Colors.ERROR)
             return
             
-        nonlocal rename_target_id
+        nonlocal rename_target_id, current_note_id
+        target_note_data = db_manager.get_note(rename_target_id)
+        target_cat = target_note_data[3] if target_note_data else current_note_category
+
         success, new_display_title = note_manager.rename_note(
             db_manager,
             rename_target_id,
             new_title,
-            current_note_category
+            target_cat
         )
         
         if success:
             if current_note_id == rename_target_id:
                 page.title = f"Zettelkasten AI Notes - {new_display_title}"
+                if editor_textfield.value:
+                    lines = editor_textfield.value.split('\n')
+                    if lines:
+                        lines[0] = f"# {new_display_title}"
+                    else:
+                        lines = [f"# {new_display_title}"]
+                    editor_textfield.value = '\n'.join(lines)
+                else:
+                    editor_textfield.value = f"# {new_display_title}\n\n"
+                editor_textfield.update()
+                update_preview()
+                
             rename_dialog.open = False
+            rename_note_field.value = ""
+            
+            if hasattr(mind_map_widget, 'invalidate_cache'):
+                mind_map_widget.invalidate_cache()
+
+            load_notes(category_to_select=current_note_category)
+            display_linked_notes()
+            update_mind_map()
             page.update()
             show_snack_bar("Note renamed successfully.")
-            load_notes(category_to_select=current_note_category)
         else:
             show_snack_bar(f"Failed to rename note: {new_display_title}", color=ft.Colors.ERROR)
             
@@ -225,7 +257,7 @@ def main(page: ft.Page):
         content=rename_note_field,
         actions=[
             ft.TextButton("Rename", on_click=save_rename_note),
-            ft.TextButton("Cancel", on_click=lambda e: setattr(rename_dialog, 'open', False) or page.update())
+            ft.TextButton("Cancel", on_click=lambda e: close_dialog(rename_dialog))
         ],
         actions_alignment=ft.MainAxisAlignment.END
     )
@@ -290,7 +322,7 @@ def main(page: ft.Page):
             linkable_notes_listview
         ], tight=True, spacing=15, width=400),
         actions=[
-            ft.TextButton("Cancel", on_click=lambda e: setattr(link_note_dialog, 'open', False) or page.update())
+            ft.TextButton("Cancel", on_click=lambda e: close_dialog(link_note_dialog))
         ],
         actions_alignment=ft.MainAxisAlignment.END
     )
@@ -303,7 +335,13 @@ def main(page: ft.Page):
         category_dropdown.options.append(ft.dropdown.Option(key="", text="All Notes"))
         
         all_notes_metadata, all_categories = note_manager.load_all_notes_metadata(db_manager)
-        for category in sorted(list(all_categories)):
+        categories_set = set(all_categories)
+        if select_category and select_category.strip() and select_category != "All Notes":
+            categories_set.add(select_category)
+        if current_note_category and current_note_category.strip() and current_note_category != "All Notes":
+            categories_set.add(current_note_category)
+
+        for category in sorted(list(categories_set)):
             if category.strip():
                 category_dropdown.options.append(ft.dropdown.Option(category))
                 
@@ -436,7 +474,7 @@ def main(page: ft.Page):
                 unsaved_dialog.actions = [
                     ft.TextButton("Yes", on_click=yes_click),
                     ft.TextButton("No", on_click=no_click),
-                    ft.TextButton("Cancel", on_click=lambda e: setattr(unsaved_dialog, 'open', False) or page.update())
+                    ft.TextButton("Cancel", on_click=lambda e: close_dialog(unsaved_dialog))
                 ]
                 unsaved_dialog.open = True
                 page.update()
@@ -542,18 +580,25 @@ def main(page: ft.Page):
             nonlocal current_note_id
             success = note_manager.delete_note(db_manager, note_id)
             if success:
-                new_note()
+                if current_note_id == note_id:
+                    new_note()
                 delete_dialog.open = False
+                if hasattr(mind_map_widget, 'invalidate_cache'):
+                    mind_map_widget.invalidate_cache()
+                load_notes(category_to_select=current_note_category)
+                display_linked_notes()
+                update_mind_map()
                 page.update()
                 show_snack_bar(f"Note '{note_title}' deleted successfully.")
-                load_notes(category_to_select=current_note_category)
             else:
+                delete_dialog.open = False
+                page.update()
                 show_snack_bar("Failed to delete note.", color=ft.Colors.ERROR)
                 
         delete_dialog.content = ft.Text(f"Are you sure you want to delete '{note_title}'?\nThis action cannot be undone.")
         delete_dialog.actions = [
             ft.TextButton("Yes", on_click=yes_click),
-            ft.TextButton("No", on_click=lambda e: setattr(delete_dialog, 'open', False) or page.update())
+            ft.TextButton("No", on_click=lambda e: close_dialog(delete_dialog))
         ]
         delete_dialog.open = True
         page.update()
@@ -569,29 +614,48 @@ def main(page: ft.Page):
 
     def delete_category_action(e):
         selected_category = category_dropdown.value
-        if not selected_category:
+        if not selected_category or selected_category == "All Notes":
             show_snack_bar("Please select a valid category to delete.", color=ft.Colors.ERROR)
             return
             
         def yes_click(e):
-            success = db_manager.delete_category(selected_category)
+            nonlocal current_note_category, current_note_id, is_dirty
+            cat_to_delete = selected_category
+            success = db_manager.delete_category(cat_to_delete)
             if success:
-                new_note()
-                delete_cat_dialog.open = False
-                page.update()
-                show_snack_bar(f"Category '{selected_category}' and its notes deleted successfully.")
+                current_note_category = ""
+                current_note_id = None
+                is_dirty = False
+                editor_textfield.value = ""
+                editor_textfield.update()
+                update_preview()
+                page.title = "Zettelkasten AI Notes - New Note"
+                
+                category_dropdown.value = ""
                 load_categories(select_category="")
                 load_notes(category_to_select="")
+                delete_cat_dialog.open = False
+                if hasattr(mind_map_widget, 'invalidate_cache'):
+                    mind_map_widget.invalidate_cache()
+                display_linked_notes()
+                update_mind_map()
+                page.update()
+                show_snack_bar(f"Kategori '{cat_to_delete}' ve içerdiği tüm notlar silindi.")
             else:
+                delete_cat_dialog.open = False
+                page.update()
                 show_snack_bar("Failed to delete category.", color=ft.Colors.ERROR)
                 
-        delete_cat_dialog.content = ft.Text(f"Are you sure you want to delete category '{selected_category}'?\nAll notes belonging to this category will be deleted. This action cannot be undone.")
+        delete_cat_dialog.title = ft.Text("Kategoriyi Sil")
+        delete_cat_dialog.content = ft.Text("Bu kategoriyi ve içerdiği tüm notları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.")
         delete_cat_dialog.actions = [
-            ft.TextButton("Yes", on_click=yes_click),
-            ft.TextButton("No", on_click=lambda e: setattr(delete_cat_dialog, 'open', False) or page.update())
+            ft.TextButton("İptal", on_click=lambda e: close_dialog(delete_cat_dialog)),
+            ft.TextButton("Sil", on_click=yes_click)
         ]
         delete_cat_dialog.open = True
         page.update()
+
+    delete_category_click = delete_category_action
 
     def display_linked_notes():
         linked_notes_listview.controls.clear()
@@ -638,17 +702,21 @@ def main(page: ft.Page):
             success = db_manager.delete_note_link(current_note_id, target_note_id)
             if success:
                 unlink_dialog.open = False
-                page.update()
-                show_snack_bar(f"Successfully unlinked '{target_title}'.")
+                if hasattr(mind_map_widget, 'invalidate_cache'):
+                    mind_map_widget.invalidate_cache()
                 display_linked_notes()
                 update_mind_map()
+                page.update()
+                show_snack_bar(f"Successfully unlinked '{target_title}'.")
             else:
+                unlink_dialog.open = False
+                page.update()
                 show_snack_bar(f"Failed to unlink note: {target_title}.", color=ft.Colors.ERROR)
                 
         unlink_dialog.content = ft.Text(f"Are you sure you want to unlink '{target_title}' from the current note?")
         unlink_dialog.actions = [
             ft.TextButton("Yes", on_click=yes_click),
-            ft.TextButton("No", on_click=lambda e: setattr(unlink_dialog, 'open', False) or page.update())
+            ft.TextButton("No", on_click=lambda e: close_dialog(unlink_dialog))
         ]
         unlink_dialog.open = True
         page.update()
@@ -688,38 +756,44 @@ def main(page: ft.Page):
     def handle_ai_generation_finished(generated_notes):
         # Callback safely triggered in UI context
         loading_dialog.open = False
-        page.update()
         
         if generated_notes:
-            show_snack_bar("Notes were successfully generated and saved!")
             nonlocal current_note_category
             current_note_category = ""
+            if hasattr(mind_map_widget, 'invalidate_cache'):
+                mind_map_widget.invalidate_cache()
             load_categories(select_category="")
             load_notes(category_to_select="")
-            page.update() # Refresh Flet UI after loading new notes and categories
+            display_linked_notes()
+            update_mind_map()
+            show_snack_bar(f"{len(generated_notes)} notes were successfully generated and saved!")
         else:
             show_snack_bar("No notes were generated by the AI.", color=ft.Colors.TERTIARY)
+        page.update()
 
     def handle_ai_generation_error(message):
         # Callback safely triggered in UI context
         loading_dialog.open = False
-        page.update()
         
         error_dialog.title = ft.Text("AI Note Generation Error")
         error_dialog.content = ft.Text(f"An error occurred during AI note generation:\n{message}")
         error_dialog.actions = [
-            ft.TextButton("OK", on_click=lambda e: setattr(error_dialog, 'open', False) or page.update())
+            ft.TextButton("OK", on_click=lambda e: close_dialog(error_dialog))
         ]
         error_dialog.open = True
+        show_snack_bar(f"Error: {message}", color=ft.Colors.ERROR)
         page.update()
 
     def run_ai_generation_thread(extracted_text):
-        worker = AiNoteGeneratorWorker(
-            extracted_text,
-            on_finished=handle_ai_generation_finished,
-            on_error=handle_ai_generation_error
-        )
-        worker.run()
+        try:
+            worker = AiNoteGeneratorWorker(
+                extracted_text,
+                on_finished=handle_ai_generation_finished,
+                on_error=handle_ai_generation_error
+            )
+            worker.run()
+        except Exception as e:
+            handle_ai_generation_error(str(e))
 
     pdf_file_picker = ft.FilePicker()
     if hasattr(page, 'services'):
@@ -745,7 +819,13 @@ def main(page: ft.Page):
             page.update()
             
             # Extract text
-            extracted_text = pdf_processor.extract_text_from_pdf(pdf_path)
+            try:
+                extracted_text = pdf_processor.extract_text_from_pdf(pdf_path)
+            except Exception as ex:
+                loading_dialog.open = False
+                page.update()
+                show_snack_bar(f"Failed to read PDF: {ex}", color=ft.Colors.ERROR)
+                return
             
             if extracted_text and extracted_text.strip():
                 # Update text to reflect AI generation step
@@ -827,7 +907,7 @@ def main(page: ft.Page):
         ], tight=True, spacing=15, width=400),
         actions=[
             ft.TextButton("Save", on_click=save_api_key_settings),
-            ft.TextButton("Cancel", on_click=lambda e: setattr(settings_dialog, 'open', False) or page.update())
+            ft.TextButton("Cancel", on_click=lambda e: close_dialog(settings_dialog))
         ],
         actions_alignment=ft.MainAxisAlignment.END
     )
@@ -985,7 +1065,7 @@ def main(page: ft.Page):
             ft.Divider(),
             ft.Row([
                 category_dropdown,
-                ft.IconButton(ft.Icons.ADD_BOX, on_click=lambda e: setattr(new_category_dialog, 'open', True) or page.update(), tooltip="New Category"),
+                ft.IconButton(ft.Icons.ADD_BOX, on_click=lambda e: (setattr(new_category_field, 'value', '') or setattr(new_category_dialog, 'open', True) or page.update()), tooltip="New Category"),
                 ft.IconButton(ft.Icons.DELETE_FOREVER, on_click=delete_category_action, tooltip="Delete Category")
             ], spacing=5),
             search_textfield,
@@ -1047,13 +1127,7 @@ def main(page: ft.Page):
 
     # Mind Map Container
     mind_map_container = ft.Container(
-        content=ft.InteractiveViewer(
-            content=mind_map_widget,
-            constrained=True,
-            min_scale=0.1,
-            max_scale=3.0,
-            expand=True
-        ),
+        content=mind_map_widget,
         height=350,
         border_radius=8,
         bgcolor=ft.Colors.SURFACE_CONTAINER,
