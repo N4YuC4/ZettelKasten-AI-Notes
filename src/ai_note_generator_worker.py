@@ -92,6 +92,7 @@ class AiNoteGeneratorWorker:
             # 4. Stage 1: Build fresh mapping of existing notes & disambiguate titles
             title_to_id = db_manager_worker.get_all_note_titles_and_ids()
             used_titles = set(title_to_id.keys())
+            batch_title_to_id = {}
             log_debug(f"DEBUG: Initial title_to_id count: {len(title_to_id)}")
 
             for note_data in generated_notes:
@@ -108,6 +109,10 @@ class AiNoteGeneratorWorker:
                 note_data['_final_id'] = new_id
                 note_data['_final_title'] = final_title
                 note_data['_is_new'] = True
+
+                batch_title_to_id[final_title] = new_id
+                batch_title_to_id[sanitized_title] = new_id
+                batch_title_to_id[raw_title] = new_id
 
                 title_to_id[final_title] = new_id
                 if sanitized_title not in title_to_id:
@@ -141,7 +146,12 @@ class AiNoteGeneratorWorker:
                         if not isinstance(target_title_raw, str):
                             continue
                         sanitized_target_title = note_service.sanitize_title(target_title_raw)
-                        target_id = title_to_id.get(sanitized_target_title) or title_to_id.get(target_title_raw)
+                        target_id = (
+                            batch_title_to_id.get(sanitized_target_title)
+                            or batch_title_to_id.get(target_title_raw)
+                            or title_to_id.get(sanitized_target_title)
+                            or title_to_id.get(target_title_raw)
+                        )
                         # Avoid self-referential links and ensure target exists
                         if target_id and target_id != final_id:
                             link_pair = (final_id, target_id)

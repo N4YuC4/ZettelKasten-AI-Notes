@@ -288,6 +288,8 @@ class DialogManager:
         on_save_api_key: Callable[[str], None]
     ) -> None:
         """Opens settings dialog for theme, auto-save, and API key."""
+        import os
+        self.api_key_field.value = os.getenv("GEMINI_API_KEY", "")
         self.settings_dialog.content = ft.Column([
             ft.Row([ft.Text("Theme Mode", weight=ft.FontWeight.BOLD), theme_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Row([ft.Text("Auto Save", weight=ft.FontWeight.BOLD), auto_save_switch], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
@@ -299,7 +301,7 @@ class DialogManager:
 
         self.settings_dialog.actions = [
             ft.TextButton("Save", on_click=lambda e: (
-                on_save_api_key(self.api_key_field.value.strip()),
+                on_save_api_key((self.api_key_field.value or "").strip()),
                 self.close(self.settings_dialog)
             )),
             ft.TextButton("Cancel", on_click=lambda e: self.close(self.settings_dialog))

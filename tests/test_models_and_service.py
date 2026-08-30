@@ -89,6 +89,13 @@ def test_note_service_crud_and_links(temp_db):
     assert new_title == "Updated Atomic Note"
     assert service.get_note_content(nid).startswith("# Updated Atomic Note")
 
+    # Rename note preserving category when category is None
+    success, new_title = service.rename_note(nid, "Renamed Preserving Category")
+    assert success is True
+    note_model = service.get_note(nid)
+    assert note_model.category == "Science"
+    assert service.get_note_content(nid).startswith("# Renamed Preserving Category")
+
     # Rename non-existent note
     fail_success, fail_msg = service.rename_note("fake-id", "New Title")
     assert fail_success is False
@@ -120,6 +127,15 @@ def test_note_service_crud_and_links(temp_db):
     assert service.delete_category("") is False
     meta_after, _ = service.load_all_notes_metadata()
     assert len(meta_after) == 0
+
+
+def test_sanitize_title_preserves_link_text():
+    assert note_service.sanitize_title("# [Python 3.13 Guide](https://python.org)") == "Python 3.13 Guide"
+    assert note_service.sanitize_title("# [[Quantum Computing]]") == "Quantum Computing"
+    assert note_service.sanitize_title("# [[Target Note|Custom Alias]]") == "Custom Alias"
+    assert note_service.sanitize_title("# ![Image](pic.png) Actual Heading") == "Actual Heading"
+    assert note_service.sanitize_title("") == "Untitled Note"
+    assert note_service.sanitize_title("   ") == "Untitled Note"
 
 
 def test_app_state_listeners():

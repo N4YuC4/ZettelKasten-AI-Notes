@@ -17,13 +17,17 @@ class RightPanelView(ft.Container):
         on_map_note_selected: Callable[[str], None],
         on_linked_note_clicked: Callable[[str], None],
         on_unlink_note_clicked: Callable[[str, str], None],
+        on_collapse_clicked: Optional[Callable[[], None]] = None,
     ):
         super().__init__()
         self.db_manager = db_manager
         self.on_map_note_selected = on_map_note_selected
         self.on_linked_note_clicked = on_linked_note_clicked
         self.on_unlink_note_clicked = on_unlink_note_clicked
+        self.on_collapse_clicked = on_collapse_clicked
 
+        self.is_collapsed = False
+        self.expanded_width = 350
         self.width = 350
         self.padding = 15
         self.bgcolor = ft.Colors.SURFACE_CONTAINER_HIGHEST
@@ -90,15 +94,85 @@ class RightPanelView(ft.Container):
                 self.page.update()
 
     def _build_layout(self):
-        self.content = ft.Column([
-            ft.Text("Interactive Mind Map", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.PRIMARY),
-            ft.Divider(),
-            self.mind_map_container,
-            self.mind_map_splitter,
-            ft.Divider(),
-            ft.Text("Linked Connections", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.PRIMARY),
-            self.linked_notes_listview
-        ], expand=True)
+        if self.is_collapsed:
+            # Narrow Rail Layout (50px wide column)
+            self.content = ft.Column([
+                ft.IconButton(
+                    icon=ft.Icons.KEYBOARD_DOUBLE_ARROW_LEFT,
+                    icon_color=ft.Colors.PRIMARY,
+                    icon_size=20,
+                    tooltip="Genişlet (Ctrl+])",
+                    on_click=lambda e: self.on_collapse_clicked() if self.on_collapse_clicked else self.toggle_collapsed()
+                ),
+                ft.Divider(height=1, thickness=1),
+                ft.IconButton(
+                    icon=ft.Icons.HUB,
+                    icon_color=ft.Colors.ON_SURFACE_VARIANT,
+                    icon_size=18,
+                    tooltip="Zihin Haritası",
+                    on_click=lambda e: self.set_collapsed(False)
+                ),
+                ft.IconButton(
+                    icon=ft.Icons.LINK,
+                    icon_color=ft.Colors.ON_SURFACE_VARIANT,
+                    icon_size=18,
+                    tooltip="Bağlantılar",
+                    on_click=lambda e: self.set_collapsed(False)
+                ),
+            ], expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
+        else:
+            # Full Right Panel Layout
+            header_controls = [
+                ft.Icon(ft.Icons.HUB, color=ft.Colors.PRIMARY, size=20),
+                ft.Text("Mind Map", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.PRIMARY, expand=True),
+            ]
+            if self.on_collapse_clicked:
+                header_controls.append(
+                    ft.IconButton(
+                        icon=ft.Icons.KEYBOARD_DOUBLE_ARROW_RIGHT,
+                        icon_color=ft.Colors.ON_SURFACE_VARIANT,
+                        icon_size=18,
+                        tooltip="Daralt (Ctrl+])",
+                        on_click=lambda e: self.on_collapse_clicked() if self.on_collapse_clicked else self.toggle_collapsed()
+                    )
+                )
+
+            self.content = ft.Column([
+                ft.Row(header_controls, alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Divider(height=1, thickness=1),
+                self.mind_map_container,
+                self.mind_map_splitter,
+                ft.Divider(height=1, thickness=1),
+                ft.Row([
+                    ft.Icon(ft.Icons.LINK, color=ft.Colors.PRIMARY, size=18),
+                    ft.Text("Linked Connections", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.PRIMARY),
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
+                self.linked_notes_listview
+            ], expand=True, spacing=8)
+
+    def set_collapsed(self, collapsed: bool):
+        """Switches between narrow rail and expanded right panel."""
+        if self.is_collapsed == collapsed:
+            return
+        self.is_collapsed = collapsed
+        if collapsed:
+            if self.width and self.width > 120:
+                self.expanded_width = self.width
+            self.width = 50
+            self.padding = ft.Padding.symmetric(horizontal=4, vertical=10)
+        else:
+            self.width = self.expanded_width or 350
+            self.padding = 15
+        self._build_layout()
+        try:
+            if self.page:
+                self.update()
+        except Exception:
+            pass
+
+    def toggle_collapsed(self):
+        """Toggles between expanded and narrow rail."""
+        self.set_collapsed(not self.is_collapsed)
 
     def update_mind_map(
         self,
@@ -138,7 +212,7 @@ class RightPanelView(ft.Container):
                         padding=5,
                         border_radius=5,
                         on_click=lambda e, nid=linked_id: self.on_linked_note_clicked(nid),
-                        on_hover=lambda e: setattr(e.control, 'bgcolor', ft.Colors.ON_INVERSE_SURFACE if e.data == "true" else ft.Colors.TRANSPARENT) or e.control.update()
+                        on_hover=lambda e: setattr(e.control, 'bgcolor', ft.Colors.SURFACE_CONTAINER_HIGH if e.data == "true" else ft.Colors.TRANSPARENT) or e.control.update()
                     )
                     self.linked_notes_listview.controls.append(item)
             else:

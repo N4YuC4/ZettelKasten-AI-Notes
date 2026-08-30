@@ -236,7 +236,7 @@ class MindMapWidget(ft.Container):
         
         # 1. Draw edge links (lines with arrowheads)
         edge_width = 1.5
-        edge_paint = ft.Paint(color=ft.Colors.OUTLINE, stroke_width=edge_width, style=ft.PaintingStyle.STROKE)
+        edge_paint = ft.Paint(color=ft.Colors.OUTLINE_VARIANT, stroke_width=edge_width, style=ft.PaintingStyle.STROKE)
         
         for source_id, target_id in self.links:
             if source_id in self.notes and target_id in self.notes:
@@ -274,8 +274,8 @@ class MindMapWidget(ft.Container):
                 shapes.append(cv.Line(x1=adj_end_x, y1=adj_end_y, x2=x2, y2=y2, paint=edge_paint))
                 
         # 2. Draw nodes
-        border_width = 2.0
-        border_paint = ft.Paint(color=ft.Colors.OUTLINE, stroke_width=border_width, style=ft.PaintingStyle.STROKE)
+        border_width = 1.5
+        border_paint = ft.Paint(color=ft.Colors.OUTLINE_VARIANT, stroke_width=border_width, style=ft.PaintingStyle.STROKE)
         
         for note_id, data in self.notes.items():
             mapped_x, mapped_y = data['pos']
@@ -286,6 +286,7 @@ class MindMapWidget(ft.Container):
             # Use specific color based on selection status
             is_current = (note_id == self.current_note_id)
             color = ft.Colors.PRIMARY if is_current else ft.Colors.SURFACE_CONTAINER_HIGHEST
+            text_color = ft.Colors.ON_PRIMARY if is_current else ft.Colors.ON_SURFACE
             
             fill_paint = ft.Paint(color=color, style=ft.PaintingStyle.FILL)
             
@@ -304,7 +305,7 @@ class MindMapWidget(ft.Container):
                 y=mapped_y,
                 value=title,
                 alignment=ft.Alignment.CENTER,
-                style=ft.TextStyle(size=font_size, color=ft.Colors.ON_PRIMARY if is_current else ft.Colors.ON_SURFACE_VARIANT, weight=ft.FontWeight.BOLD)
+                style=ft.TextStyle(size=font_size, color=text_color, weight=ft.FontWeight.BOLD)
             ))
             
         self.canvas.shapes = shapes

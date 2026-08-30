@@ -20,7 +20,7 @@ def delete_note(db_manager, note_id: str) -> bool:
     return service.delete_note(note_id)
 
 
-def rename_note(db_manager, note_id: str, new_title: str, category_path: str = "") -> Tuple[bool, str]:
+def rename_note(db_manager, note_id: str, new_title: str, category_path: Optional[str] = None) -> Tuple[bool, str]:
     """Renames a note via NoteService."""
     service = NoteService(db_manager)
     return service.rename_note(note_id, new_title, category_path)

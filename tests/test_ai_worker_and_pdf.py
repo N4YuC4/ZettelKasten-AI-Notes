@@ -127,6 +127,32 @@ def test_ai_worker_rejects_self_referential_links(temp_db, monkeypatch):
         assert src_id != tgt_id, f"Self-referential link detected: {src_id} -> {tgt_id}"
     assert len(all_links) >= 1
 
+def test_ai_worker_batch_intra_connection_prioritization(temp_db, monkeypatch):
+    # Pre-insert an old note with title "Introduction"
+    temp_db.insert_note("old-id", "Introduction", "Old Intro Content", "Old Category")
+
+    # AI generates a batch where Note 1 is "Introduction" (will be disambiguated to Introduction (2))
+    # and Note 2 is "Details" linking to "Introduction" (should link to the new Note 1, not old-id)
+    notes_payload = [
+        {"title": "Introduction", "content": "New Intro Content", "connections": [], "general_title": "AI Batch"},
+        {"title": "Details", "content": "Details Content", "connections": ["Introduction"], "general_title": "AI Batch"}
+    ]
+
+    mock_gemini_client = MagicMock()
+    mock_gemini_client.generate_zettelkasten_notes.return_value = notes_payload
+    monkeypatch.setattr("ai_note_generator_worker.GeminiApiClient", lambda: mock_gemini_client)
+
+    worker = AiNoteGeneratorWorker("dummy text", on_finished=None, on_error=None)
+    worker.run()
+
+    all_notes, _ = note_manager.load_all_notes_metadata(temp_db)
+    details_note_id = [nid for nid, title, _ in all_notes if title == "Details"][0]
+    new_intro_id = [nid for nid, title, _ in all_notes if title == "Introduction (2)"][0]
+
+    links = temp_db.get_note_links(details_note_id)
+    assert new_intro_id in links
+    assert "old-id" not in links
+
 def test_ai_worker_cancellation(temp_db, monkeypatch):
     mock_gemini_client = MagicMock()
     mock_gemini_client.generate_zettelkasten_notes.return_value = [

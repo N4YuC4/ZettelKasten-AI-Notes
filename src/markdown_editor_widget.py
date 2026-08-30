@@ -41,12 +41,14 @@ class MarkdownEditorWidget(ft.Container):
         on_wikilink_clicked: Optional[Callable[[str], None]] = None,
         get_all_notes_callback: Optional[Callable[[], List[Tuple[str, str, str]]]] = None,
         on_save_shortcut: Optional[Callable[[], None]] = None,
+        on_blur: Optional[Callable[[], None]] = None,
     ):
         super().__init__()
         self.on_content_change = on_content_change
         self.on_wikilink_clicked = on_wikilink_clicked
         self.get_all_notes_callback = get_all_notes_callback
         self.on_save_shortcut = on_save_shortcut
+        self.on_blur = on_blur
 
         # Modlar: 'source' (Kaynak / Düzenleme) veya 'reading' (Okuma / Önizleme)
         self.current_mode = "source"
@@ -73,6 +75,7 @@ class MarkdownEditorWidget(ft.Container):
             cursor_width=2,
             on_change=self._handle_editor_change,
             on_selection_change=self._handle_selection_change,
+            on_blur=self._handle_editor_blur,
         )
 
         # Okuma Modu: Renderlanmış Markdown görünümü
@@ -309,6 +312,10 @@ class MarkdownEditorWidget(ft.Container):
         if self.on_content_change:
             self.on_content_change(self._raw_content)
 
+    def _handle_editor_blur(self, e):
+        if self.on_blur:
+            self.on_blur()
+
     def _handle_selection_change(self, e):
         ctrl = e.control
         if hasattr(ctrl, 'selection') and ctrl.selection:
@@ -362,6 +369,8 @@ class MarkdownEditorWidget(ft.Container):
         end = max(0, min(end, len(current_text)))
 
         new_text = current_text[:start] + text_to_insert + current_text[end:]
+        self._selection_start = start + len(text_to_insert)
+        self._selection_end = self._selection_start
         self._apply_content_update(new_text)
 
     def wrap_selection(self, prefix: str, suffix: str, default_text: str = ""):
@@ -381,6 +390,8 @@ class MarkdownEditorWidget(ft.Container):
 
         wrapped = f"{prefix}{selected_text}{suffix}"
         new_text = current_text[:start] + wrapped + current_text[end:]
+        self._selection_start = start + len(prefix)
+        self._selection_end = start + len(prefix) + len(selected_text)
         self._apply_content_update(new_text)
 
     def prepend_lines(self, prefix: str):

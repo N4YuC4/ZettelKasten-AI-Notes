@@ -1,9 +1,10 @@
 # main.py
 #
 # Main application entry point and coordinator for Zettelkasten AI Notes.
-# Wires together AppState, NoteService, DialogManager, and modular UI components.
+# Wires together AppState, NoteService, DialogManager, and responsive modular UI components.
 
 import os
+import asyncio
 import threading
 import flet as ft
 from dotenv import set_key
@@ -11,11 +12,14 @@ from typing import Optional
 
 from logger import log_debug, log_error
 import database_manager
-from note_service import NoteService
+from note_service import NoteService, sanitize_title, disambiguate_title
 import pdf_processor
 from ai_note_generator_worker import AiNoteGeneratorWorker
 from app_state import AppState
 from ui import DialogManager, SidebarView, RightPanelView, EditorWorkspaceView, create_vertical_splitter
+
+COMPACT_BREAKPOINT = 768
+MEDIUM_BREAKPOINT = 1150
 
 
 def main(page: ft.Page):
@@ -24,7 +28,7 @@ def main(page: ft.Page):
     page.theme_mode = ft.ThemeMode.DARK
     page.window_width = 1400
     page.window_height = 900
-    page.padding = 10
+    page.padding = ft.Padding.all(6)
 
     # 2. Service & State Initialization
     db_manager = database_manager.DatabaseManager()
@@ -76,6 +80,10 @@ def main(page: ft.Page):
         sidebar.render_notes(filtered, state.current_note_id, selected_cat, total_count)
         refresh_linked_notes()
         refresh_mind_map()
+        try:
+            page.update()
+        except Exception:
+            pass
 
     def refresh_linked_notes():
         linked_data = []
@@ -98,7 +106,28 @@ def main(page: ft.Page):
 
         right_panel.update_mind_map(filtered_notes, filtered_links, state.current_note_id)
 
+    def update_header_status(title: str, category: str = ""):
+        note_title_text.value = title or "New Note"
+        cat_clean = (category or "").strip()
+        if cat_clean and cat_clean != "All Notes":
+            category_chip.content.value = cat_clean
+            category_chip.visible = True
+        else:
+            category_chip.visible = False
+        try:
+            note_title_text.update()
+            category_chip.update()
+        except Exception:
+            pass
+
+    _auto_save_seq = 0
+
+    def cancel_auto_save_timer():
+        nonlocal _auto_save_seq
+        _auto_save_seq += 1
+
     def guard_unsaved_changes(action_fn, *args):
+        cancel_auto_save_timer()
         if state.is_dirty:
             if state.auto_save:
                 save_current_note()
@@ -112,11 +141,13 @@ def main(page: ft.Page):
             action_fn(*args)
 
     def open_note_internal(note_id: str, display_title: str, category_path: str):
+        cancel_auto_save_timer()
         content = note_service.get_note_content(note_id)
         if content is not None:
             state.select_note(note_id, display_title, category_path or "")
             editor_workspace.set_content(content, mark_dirty=False)
             page.title = f"Zettelkasten AI Notes - {display_title}"
+            update_header_status(display_title, category_path)
             refresh_notes()
         else:
             show_snack_bar(f"Could not read content for note: {display_title}", color=ft.Colors.ERROR)
@@ -129,18 +160,33 @@ def main(page: ft.Page):
                 guard_unsaved_changes(open_note_internal, nid, title, cat)
                 break
 
-    def new_note_internal():
-        state.select_note(None, "New Note", state.selected_category_filter)
-        editor_workspace.set_content("", mark_dirty=False)
-        page.title = "Zettelkasten AI Notes - New Note"
-        page.update()
+    def new_note_internal(initial_title: Optional[str] = None, initial_content: Optional[str] = None):
+        cancel_auto_save_timer()
+        all_notes, _ = note_service.load_all_notes_metadata()
+        existing_titles = {t for _, t, _ in all_notes}
+
+        base_title = initial_title or "New Note"
+        unique_title = disambiguate_title(base_title, existing_titles)
+
+        category = state.selected_category_filter if state.selected_category_filter and state.selected_category_filter != "All Notes" else ""
+        content = initial_content if initial_content is not None else f"# {unique_title}\n\n"
+
+        note_id, title = note_service.save_note(None, content, category)
+        if note_id and title:
+            state.select_note(note_id, title, category)
+            editor_workspace.set_content(content, mark_dirty=False)
+            page.title = f"Zettelkasten AI Notes - {title}"
+            update_header_status(title, category)
+            refresh_categories(category)
+            refresh_notes(category)
+            try:
+                page.update()
+            except Exception:
+                pass
 
     def save_current_note():
+        cancel_auto_save_timer()
         content = editor_workspace.get_content()
-        if not content.strip():
-            show_snack_bar("Cannot save empty note.", color=ft.Colors.ERROR)
-            return
-
         cat_to_save = state.current_note_category
         note_id, title = note_service.save_note(state.current_note_id, content, cat_to_save)
 
@@ -148,6 +194,7 @@ def main(page: ft.Page):
             state.select_note(note_id, title, cat_to_save)
             editor_workspace.set_dirty(False)
             page.title = f"Zettelkasten AI Notes - {title}"
+            update_header_status(title, cat_to_save)
             show_snack_bar(f"Note '{title}' saved successfully.")
             refresh_categories(cat_to_save)
             refresh_notes(cat_to_save)
@@ -163,15 +210,57 @@ def main(page: ft.Page):
                 show_snack_bar(f"'{title}' notuna geçildi.")
                 return
 
-        # Not not found, prompt creation
+        source_note_id = state.current_note_id
+
         def create_linked_note():
-            new_note_internal()
-            initial_content = f"# {target_title}\n\n"
-            editor_workspace.set_content(initial_content, mark_dirty=True)
-            save_current_note()
-            show_snack_bar(f"'{target_title}' notu oluşturuldu.")
+            new_note_internal(initial_title=target_title, initial_content=f"# {target_title}\n\n")
+            if source_note_id and state.current_note_id and source_note_id != state.current_note_id:
+                note_service.create_link(source_note_id, state.current_note_id)
+                refresh_linked_notes()
+                refresh_mind_map()
+            show_snack_bar(f"'{target_title}' notu oluşturuldu ve bağlandı.")
 
         dialog_manager.show_create_linked_note_prompt(target_title, on_create=create_linked_note)
+
+    # Theme and Auto-Save Toggles
+    def toggle_theme(e):
+        if page.theme_mode == ft.ThemeMode.DARK:
+            page.theme_mode = ft.ThemeMode.LIGHT
+            db_manager.set_setting("UI_THEME", "Light")
+            theme_btn.icon = ft.Icons.DARK_MODE
+            theme_btn.tooltip = "Switch to Dark Mode"
+        else:
+            page.theme_mode = ft.ThemeMode.DARK
+            db_manager.set_setting("UI_THEME", "Dark")
+            theme_btn.icon = ft.Icons.LIGHT_MODE
+            theme_btn.tooltip = "Switch to Light Mode"
+        refresh_mind_map()
+        page.update()
+
+    theme_btn = ft.IconButton(
+        icon=ft.Icons.LIGHT_MODE if page.theme_mode == ft.ThemeMode.DARK else ft.Icons.DARK_MODE,
+        tooltip="Switch to Light Mode" if page.theme_mode == ft.ThemeMode.DARK else "Switch to Dark Mode",
+        on_click=toggle_theme
+    )
+
+    def toggle_auto_save(e):
+        val = "True" if auto_save_switch.value else "False"
+        db_manager.set_setting("AUTO_SAVE", val)
+        state.set_auto_save(auto_save_switch.value)
+
+    auto_save_switch = ft.Switch(
+        label="Auto Save",
+        value=state.auto_save,
+        on_change=toggle_auto_save
+    )
+
+    def toggle_sidebar():
+        sidebar.toggle_collapsed()
+        update_layout()
+
+    def toggle_right_panel():
+        right_panel.toggle_collapsed()
+        update_layout()
 
     sidebar = SidebarView(
         on_category_changed=lambda cat: (state.set_category_filter(cat), refresh_notes()),
@@ -193,7 +282,8 @@ def main(page: ft.Page):
             theme_btn=theme_btn,
             auto_save_switch=auto_save_switch,
             on_save_api_key=handle_save_api_key
-        )
+        ),
+        on_collapse_clicked=toggle_sidebar
     )
 
     right_panel = RightPanelView(
@@ -203,18 +293,70 @@ def main(page: ft.Page):
         on_unlink_note_clicked=lambda nid, title: dialog_manager.show_unlink_confirm(
             target_title=title,
             on_confirm=lambda: handle_unlink_note(nid, title)
-        )
+        ),
+        on_collapse_clicked=toggle_right_panel
     )
 
+    async def _async_auto_save(seq: int):
+        await asyncio.sleep(0.3)
+        if seq == _auto_save_seq and state.auto_save and state.is_dirty and state.current_note_id:
+            try:
+                cnt = editor_workspace.get_content()
+                cat = state.current_note_category
+                nid, saved_title = note_service.save_note(state.current_note_id, cnt, cat)
+                if nid and saved_title:
+                    state.current_note_title = saved_title
+                    state.set_dirty(False)
+                    editor_workspace.set_dirty(False)
+                    refresh_notes()
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+            except Exception as ex:
+                log_error(f"Async auto-save error: {ex}")
+
+    def handle_editor_blur():
+        nonlocal _auto_save_seq
+        _auto_save_seq += 1
+        if state.auto_save and state.is_dirty and state.current_note_id:
+            try:
+                cnt = editor_workspace.get_content()
+                cat = state.current_note_category
+                nid, saved_title = note_service.save_note(state.current_note_id, cnt, cat)
+                if nid and saved_title:
+                    state.current_note_title = saved_title
+                    state.set_dirty(False)
+                    editor_workspace.set_dirty(False)
+                    refresh_notes()
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+            except Exception as ex:
+                log_error(f"Blur auto-save error: {ex}")
+
+    def handle_editor_content_change(text: str):
+        nonlocal _auto_save_seq
+        state.set_dirty(True)
+        live_title = sanitize_title(text)
+        update_header_status(live_title, state.current_note_category)
+        page.title = f"Zettelkasten AI Notes - {live_title}"
+
+        if state.auto_save and state.current_note_id:
+            _auto_save_seq += 1
+            page.run_task(_async_auto_save, _auto_save_seq)
+
     editor_workspace = EditorWorkspaceView(
-        on_content_change=lambda text: state.set_dirty(True),
+        on_content_change=handle_editor_content_change,
         on_wikilink_clicked=handle_wikilink_tap,
         get_all_notes_callback=lambda: note_service.load_all_notes_metadata()[0],
         on_new_note_clicked=lambda: guard_unsaved_changes(new_note_internal),
         on_save_note_clicked=save_current_note,
         on_delete_note_clicked=lambda: handle_delete_current_note(),
         on_link_note_clicked=lambda: handle_link_picker_open(),
-        on_generate_ai_clicked=lambda: trigger_pdf_generation()
+        on_generate_ai_clicked=lambda: page.run_task(trigger_pdf_generation),
+        on_blur=handle_editor_blur,
     )
 
     # 6. Specific Action Handlers
@@ -222,6 +364,10 @@ def main(page: ft.Page):
         cleaned = category_name.strip()
         if not cleaned:
             show_snack_bar("Category name cannot be empty.", color=ft.Colors.ERROR)
+            return
+
+        if cleaned.lower() == "all notes":
+            show_snack_bar("Category name 'All Notes' is reserved.", color=ft.Colors.ERROR)
             return
 
         if cleaned in state.all_categories:
@@ -246,15 +392,17 @@ def main(page: ft.Page):
         )
 
     def handle_delete_category_confirmed(cat_to_delete: str):
+        cancel_auto_save_timer()
         success = note_service.delete_category(cat_to_delete)
         if success:
-            state.select_note(None, "New Note", "")
             state.set_category_filter("")
-            editor_workspace.set_content("", mark_dirty=False)
-            page.title = "Zettelkasten AI Notes - New Note"
             right_panel.mind_map_widget.invalidate_cache()
             refresh_categories("")
-            refresh_notes("")
+            all_notes, _ = note_service.load_all_notes_metadata()
+            if all_notes:
+                open_note_internal(all_notes[0][0], all_notes[0][1], all_notes[0][2])
+            else:
+                new_note_internal()
             show_snack_bar(f"Kategori '{cat_to_delete}' ve içerdiği tüm notlar silindi.")
         else:
             show_snack_bar("Failed to delete category.", color=ft.Colors.ERROR)
@@ -264,12 +412,13 @@ def main(page: ft.Page):
             show_snack_bar("Note title cannot be empty.", color=ft.Colors.ERROR)
             return
 
-        success, msg_or_title = note_service.rename_note(note_id, new_title, state.current_note_category)
+        success, msg_or_title = note_service.rename_note(note_id, new_title)
         if success:
             dialog_manager.close(dialog_manager.rename_dialog)
             if state.current_note_id == note_id:
                 state.current_note_title = msg_or_title
                 page.title = f"Zettelkasten AI Notes - {msg_or_title}"
+                update_header_status(msg_or_title, state.current_note_category)
                 curr_val = editor_workspace.get_content()
                 lines = curr_val.split('\n') if curr_val else []
                 if lines:
@@ -336,6 +485,7 @@ def main(page: ft.Page):
 
     def handle_save_api_key(api_key: str):
         if api_key:
+            os.environ["GEMINI_API_KEY"] = api_key
             dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
             set_key(dotenv_path, "GEMINI_API_KEY", api_key)
             show_snack_bar("Gemini API Key saved successfully.")
@@ -363,7 +513,7 @@ def main(page: ft.Page):
         dialog_manager.show_error("AI Note Generation Error", f"An error occurred during AI note generation:\n{err_msg}")
         show_snack_bar(f"Error: {err_msg}", color=ft.Colors.ERROR)
 
-    async def trigger_pdf_generation():
+    async def trigger_pdf_generation(e=None):
         files = await pdf_file_picker.pick_files(
             dialog_title="Select PDF File",
             allowed_extensions=["pdf"]
@@ -395,54 +545,115 @@ def main(page: ft.Page):
         else:
             show_snack_bar("No PDF file selected.", color=ft.Colors.TERTIARY)
 
-    # 8. Theme & Auto-Save Settings Toggles
-    def toggle_theme(e):
-        if page.theme_mode == ft.ThemeMode.DARK:
-            page.theme_mode = ft.ThemeMode.LIGHT
-            db_manager.set_setting("UI_THEME", "Light")
-            theme_btn.icon = ft.Icons.DARK_MODE
-            theme_btn.tooltip = "Switch to Dark Mode"
-        else:
-            page.theme_mode = ft.ThemeMode.DARK
-            db_manager.set_setting("UI_THEME", "Dark")
-            theme_btn.icon = ft.Icons.LIGHT_MODE
-            theme_btn.tooltip = "Switch to Light Mode"
-        page.update()
-
-    theme_btn = ft.IconButton(
-        icon=ft.Icons.LIGHT_MODE if page.theme_mode == ft.ThemeMode.DARK else ft.Icons.DARK_MODE,
-        tooltip="Switch to Light Mode" if page.theme_mode == ft.ThemeMode.DARK else "Switch to Dark Mode",
-        on_click=toggle_theme
-    )
-
-    def toggle_auto_save(e):
-        val = "True" if auto_save_switch.value else "False"
-        db_manager.set_setting("AUTO_SAVE", val)
-        state.set_auto_save(auto_save_switch.value)
-
-    auto_save_switch = ft.Switch(
-        label="Auto Save",
-        value=state.auto_save,
-        on_change=toggle_auto_save
-    )
-
-    # 9. Layout Assembly with Resizable Splitters
+    # 8. Responsive Layout Controllers & Splitters with Narrow Rail Mode
     def on_left_drag(e: ft.DragUpdateEvent):
         delta = e.local_delta.x if e.local_delta else 0
-        new_width = sidebar.width + delta
-        if 180 <= new_width <= 600:
-            sidebar.width = new_width
-            page.update()
+        new_width = (sidebar.width or 300) + delta
+        if new_width < 120:
+            sidebar.set_collapsed(True)
+        else:
+            if sidebar.is_collapsed:
+                sidebar.set_collapsed(False)
+            if 120 <= new_width <= 550:
+                sidebar.width = new_width
+                sidebar.expanded_width = new_width
+        page.update()
 
     def on_right_drag(e: ft.DragUpdateEvent):
         delta = e.local_delta.x if e.local_delta else 0
-        new_width = right_panel.width - delta
-        if 200 <= new_width <= 700:
-            right_panel.width = new_width
-            page.update()
+        new_width = (right_panel.width or 350) - delta
+        if new_width < 120:
+            right_panel.set_collapsed(True)
+        else:
+            if right_panel.is_collapsed:
+                right_panel.set_collapsed(False)
+            if 120 <= new_width <= 600:
+                right_panel.width = new_width
+                right_panel.expanded_width = new_width
+        page.update()
 
     left_splitter = create_vertical_splitter(on_left_drag)
     right_splitter = create_vertical_splitter(on_right_drag)
+
+    # Dynamic Top AppBar Title & Status (only note title & category chip)
+    note_title_text = ft.Text(
+        "New Note",
+        size=15,
+        weight=ft.FontWeight.BOLD,
+        color=ft.Colors.ON_SURFACE,
+        overflow=ft.TextOverflow.ELLIPSIS,
+    )
+    category_chip = ft.Container(
+        content=ft.Text("All Notes", size=11, color=ft.Colors.PRIMARY, weight=ft.FontWeight.W_600),
+        padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+        bgcolor=ft.Colors.PRIMARY_CONTAINER,
+        border_radius=12,
+        visible=False,
+    )
+    title_row = ft.Row([
+        note_title_text,
+        category_chip,
+    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    # Clean Top AppBar containing only Note Title and Editor Actions
+    page.appbar = ft.AppBar(
+        automatically_imply_leading=False,
+        leading=None,
+        leading_width=16,
+        title=title_row,
+        actions=[
+            ft.IconButton(
+                icon=ft.Icons.NOTE_ADD_OUTLINED,
+                icon_color=ft.Colors.PRIMARY,
+                tooltip="Yeni Not (Ctrl+N)",
+                on_click=lambda e: guard_unsaved_changes(new_note_internal)
+            ),
+            ft.IconButton(
+                icon=ft.Icons.SAVE_OUTLINED,
+                icon_color=ft.Colors.SECONDARY,
+                tooltip="Notu Kaydet (Ctrl+S)",
+                on_click=lambda e: save_current_note()
+            ),
+            ft.IconButton(
+                icon=ft.Icons.DELETE_OUTLINE,
+                icon_color=ft.Colors.ERROR,
+                tooltip="Notu Sil",
+                on_click=lambda e: handle_delete_current_note()
+            ),
+            ft.IconButton(
+                icon=ft.Icons.LINK,
+                icon_color=ft.Colors.TERTIARY,
+                tooltip="Not Bağla (Ctrl+K)",
+                on_click=lambda e: handle_link_picker_open()
+            ),
+            ft.IconButton(
+                icon=ft.Icons.AUTO_AWESOME,
+                icon_color=ft.Colors.AMBER_400,
+                tooltip="PDF'ten AI Notları Üret",
+                on_click=lambda e: page.run_task(trigger_pdf_generation)
+            ),
+            ft.Container(width=8),
+        ],
+        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+        center_title=False,
+        elevation=1,
+    )
+
+    main_row = ft.Row([
+        sidebar,
+        left_splitter,
+        editor_workspace,
+        right_splitter,
+        right_panel
+    ], expand=True, spacing=4)
+
+    def update_layout(e=None):
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    page.on_resize = update_layout
 
     # Global Keyboard Shortcuts
     def handle_keyboard_event(e: ft.KeyboardEvent):
@@ -460,22 +671,19 @@ def main(page: ft.Page):
                 editor_workspace.wrap_selection("*", "*", "italik metin")
             elif k == "k":
                 editor_workspace.open_wikilink_picker()
+            elif k in ("[", "{"):
+                toggle_sidebar()
+            elif k in ("]", "}"):
+                toggle_right_panel()
 
     page.on_keyboard_event = handle_keyboard_event
 
-    page.add(
-        ft.Row([
-            sidebar,
-            left_splitter,
-            editor_workspace,
-            right_splitter,
-            right_panel
-        ], expand=True, spacing=5)
-    )
+    page.add(main_row)
 
-    # Initial data load
+    # Initial data load and layout configuration
     refresh_categories()
     refresh_notes()
+    update_layout()
 
 
 if __name__ == '__main__':

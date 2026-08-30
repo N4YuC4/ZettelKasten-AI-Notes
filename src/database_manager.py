@@ -230,7 +230,7 @@ class DatabaseManager:
     def get_all_notes_metadata(self) -> Tuple[List[Tuple[str, str, str]], Set[str]]:
         """Returns metadata list [(id, title, category)] and unique category set."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, title, category FROM notes")
+        cursor.execute("SELECT id, title, category FROM notes ORDER BY updated_at DESC")
         notes_metadata = cursor.fetchall()
         all_categories = {category for _, _, category in notes_metadata if category}
         return notes_metadata, all_categories
@@ -238,7 +238,7 @@ class DatabaseManager:
     def get_all_notes_metadata_models(self) -> List[NoteMetadata]:
         """Returns a list of typed NoteMetadata models."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, title, category FROM notes")
+        cursor.execute("SELECT id, title, category FROM notes ORDER BY updated_at DESC")
         return [NoteMetadata(id=row[0], title=row[1], category=row[2] or "") for row in cursor.fetchall()]
 
     def create_category(self, category_name: str) -> bool:

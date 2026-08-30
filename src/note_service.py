@@ -43,9 +43,17 @@ def sanitize_title(content: str) -> str:
     cleaned = re.sub(r'`', '', cleaned)
     # Remove strikethrough markers
     cleaned = re.sub(r'~~', '', cleaned)
-    # Remove image/link syntax
+    # Remove image syntax
     cleaned = re.sub(r'!\[.*?\]\(.*?\)', '', cleaned)
-    cleaned = re.sub(r'\[.*?\]\(.*?\)', '', cleaned)
+    # Extract text from standard markdown links: [text](url) -> text
+    cleaned = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', cleaned)
+    # Extract text from wikilinks: [[target|alias]] -> alias, [[target]] -> target
+    def _extract_wikilink_text(m):
+        inner = m.group(1).strip()
+        if "|" in inner:
+            return inner.split("|", 1)[1].strip()
+        return inner
+    cleaned = re.sub(r'\[\[(.*?)\]\]', _extract_wikilink_text, cleaned)
     # Remove remaining special characters
     cleaned = re.sub(r'[<>:"/\\|?*]', '', cleaned)
     
@@ -156,6 +164,9 @@ class NoteService:
     """
     Orchestrates domain business logic for note authoring, linking, and taxonomy.
     """
+    sanitize_title = staticmethod(sanitize_title)
+    disambiguate_title = staticmethod(disambiguate_title)
+
     def __init__(self, db_manager):
         self.db = db_manager
 
@@ -175,21 +186,25 @@ class NoteService:
             self.db.insert_note(new_id, title, content, category_clean)
             return new_id, title
 
-    def rename_note(self, note_id: str, new_title: str, category: str = "") -> Tuple[bool, str]:
+    def rename_note(self, note_id: str, new_title: str, category: Optional[str] = None) -> Tuple[bool, str]:
         """
         Renames a note and updates its first line heading in content.
+        Preserves existing category if category is None or empty string.
         Returns (success, new_title_or_error_message).
         """
         if not new_title or not new_title.strip():
             return False, "New title cannot be empty or result in an empty sanitized title."
 
         sanitized = sanitize_title(new_title)
-        if not sanitized or sanitized == "Untitled Note" and not new_title.strip():
+        if not sanitized or (sanitized == "Untitled Note" and not new_title.strip()):
             return False, "New title cannot be empty or result in an empty sanitized title."
 
         note_data = self.db.get_note(note_id)
         if not note_data:
             return False, "Note not found."
+
+        existing_category = note_data[3] if isinstance(note_data, (tuple, list)) else getattr(note_data, "category", "")
+        cat_to_save = category if (category is not None and category != "") else (existing_category or "")
 
         # Update the first line of the content with new heading
         current_content = note_data[2] if isinstance(note_data, (tuple, list)) else note_data.content
@@ -200,7 +215,7 @@ class NoteService:
             lines = [f"# {sanitized}"]
         updated_content = '\n'.join(lines)
 
-        self.db.update_note(note_id, sanitized, updated_content, category)
+        self.db.update_note(note_id, sanitized, updated_content, cat_to_save)
         log_debug(f"Note with ID {note_id} renamed to {sanitized}.")
         return True, sanitized
 

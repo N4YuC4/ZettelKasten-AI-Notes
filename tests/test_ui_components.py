@@ -133,3 +133,111 @@ def test_create_vertical_splitter():
     splitter = create_vertical_splitter(on_drag=lambda e: dragged.append(e))
     assert splitter.mouse_cursor == ft.MouseCursor.RESIZE_LEFT_RIGHT
 
+
+def test_sidebar_view_collapse_callback():
+    collapsed = []
+    sidebar = SidebarView(
+        on_category_changed=lambda c: None,
+        on_new_category_clicked=lambda: None,
+        on_delete_category_clicked=lambda: None,
+        on_search_changed=lambda q: None,
+        on_note_clicked=lambda nid, t, c: None,
+        on_rename_note_clicked=lambda nid, t: None,
+        on_delete_note_clicked=lambda nid, t: None,
+        on_settings_clicked=lambda: None,
+        on_collapse_clicked=lambda: collapsed.append(True),
+    )
+    assert sidebar.on_collapse_clicked is not None
+    # Trigger collapse callback
+    sidebar.on_collapse_clicked()
+    assert collapsed == [True]
+
+
+def test_right_panel_view_collapse_callback():
+    collapsed = []
+    mock_db = MagicMock()
+    mock_db.get_all_note_links.return_value = []
+    mock_db.get_all_notes_metadata.return_value = ([], set())
+
+    panel = RightPanelView(
+        db_manager=mock_db,
+        on_map_note_selected=lambda nid: None,
+        on_linked_note_clicked=lambda nid: None,
+        on_unlink_note_clicked=lambda nid, t: None,
+        on_collapse_clicked=lambda: collapsed.append(True),
+    )
+    assert panel.on_collapse_clicked is not None
+    # Trigger collapse callback
+    panel.on_collapse_clicked()
+    assert collapsed == [True]
+
+
+def test_sidebar_view_collapsed_rail():
+    sidebar = SidebarView(
+        on_category_changed=lambda c: None,
+        on_new_category_clicked=lambda: None,
+        on_delete_category_clicked=lambda: None,
+        on_search_changed=lambda q: None,
+        on_note_clicked=lambda nid, t, c: None,
+        on_rename_note_clicked=lambda nid, t: None,
+        on_delete_note_clicked=lambda nid, t: None,
+        on_settings_clicked=lambda: None,
+    )
+    assert sidebar.is_collapsed is False
+    assert sidebar.width == 300
+
+    # Collapse to narrow rail
+    sidebar.set_collapsed(True)
+    assert sidebar.is_collapsed is True
+    assert sidebar.width == 50
+
+    # Toggle back to expanded
+    sidebar.toggle_collapsed()
+    assert sidebar.is_collapsed is False
+    assert sidebar.width == 300
+
+
+def test_right_panel_view_collapsed_rail():
+    mock_db = MagicMock()
+    mock_db.get_all_note_links.return_value = []
+    mock_db.get_all_notes_metadata.return_value = ([], set())
+
+    panel = RightPanelView(
+        db_manager=mock_db,
+        on_map_note_selected=lambda nid: None,
+        on_linked_note_clicked=lambda nid: None,
+        on_unlink_note_clicked=lambda nid, t: None,
+    )
+    assert panel.is_collapsed is False
+    assert panel.width == 350
+
+    # Collapse to narrow rail
+    panel.set_collapsed(True)
+    assert panel.is_collapsed is True
+    assert panel.width == 50
+
+    # Toggle back to expanded
+    panel.toggle_collapsed()
+    assert panel.is_collapsed is False
+    assert panel.width == 350
+
+
+def test_editor_workspace_clean_layout():
+    workspace = EditorWorkspaceView(
+        on_content_change=lambda t: None,
+        on_wikilink_clicked=lambda t: None,
+        get_all_notes_callback=lambda: [],
+        on_new_note_clicked=lambda: None,
+        on_save_note_clicked=lambda: None,
+        on_delete_note_clicked=lambda: None,
+        on_link_note_clicked=lambda: None,
+        on_generate_ai_clicked=lambda: None,
+    )
+    assert workspace.expand is True
+    assert workspace.live_editor is not None
+    # Live editor is full container content
+    assert len(workspace.content.controls) == 1
+    assert workspace.content.controls[0] == workspace.live_editor
+
+
+

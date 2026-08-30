@@ -21,6 +21,7 @@ class EditorWorkspaceView(ft.Container):
         on_delete_note_clicked: Callable[[], None],
         on_link_note_clicked: Callable[[], None],
         on_generate_ai_clicked: Callable[[], None],
+        on_blur: Optional[Callable[[], None]] = None,
     ):
         super().__init__()
         self.on_content_change = on_content_change
@@ -31,10 +32,11 @@ class EditorWorkspaceView(ft.Container):
         self.on_delete_note_clicked = on_delete_note_clicked
         self.on_link_note_clicked = on_link_note_clicked
         self.on_generate_ai_clicked = on_generate_ai_clicked
+        self.on_blur = on_blur
 
         self.expand = True
         self.padding = 15
-        self.bgcolor = "#0a0e17"
+        self.bgcolor = ft.Colors.SURFACE_CONTAINER_LOW
         self.border_radius = 12
 
         self._init_controls()
@@ -47,62 +49,22 @@ class EditorWorkspaceView(ft.Container):
             on_wikilink_clicked=self.on_wikilink_clicked,
             get_all_notes_callback=self.get_all_notes_callback,
             on_save_shortcut=self.on_save_note_clicked,
+            on_blur=self.on_blur,
         )
 
-        # Bottom Action Buttons Row
+        # Retain action_buttons reference for unit tests / programmatic access
         self.action_buttons = ft.Row([
-            ft.Button(
-                content="New Note",
-                icon=ft.Icons.ADD,
-                icon_color=ft.Colors.PRIMARY,
-                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                color=ft.Colors.PRIMARY,
-                on_click=lambda e: self.on_new_note_clicked(),
-                expand=True
-            ),
-            ft.Button(
-                content="Save Note",
-                icon=ft.Icons.SAVE,
-                icon_color=ft.Colors.SECONDARY,
-                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                color=ft.Colors.SECONDARY,
-                on_click=lambda e: self.on_save_note_clicked(),
-                expand=True
-            ),
-            ft.Button(
-                content="Delete Note",
-                icon=ft.Icons.DELETE,
-                icon_color=ft.Colors.ERROR,
-                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                color=ft.Colors.ERROR,
-                on_click=lambda e: self.on_delete_note_clicked(),
-                expand=True
-            ),
-            ft.Button(
-                content="Link Note",
-                icon=ft.Icons.LINK,
-                icon_color=ft.Colors.TERTIARY,
-                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                color=ft.Colors.TERTIARY,
-                on_click=lambda e: self.on_link_note_clicked(),
-                expand=True
-            ),
-            ft.Button(
-                content="Generate AI Notes",
-                icon=ft.Icons.AUTO_AWESOME,
-                icon_color=ft.Colors.TERTIARY,
-                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-                color=ft.Colors.TERTIARY,
-                on_click=lambda e: self.on_generate_ai_clicked(),
-                expand=True
-            )
-        ], spacing=10)
+            ft.Button(content="New Note", on_click=lambda e: self.on_new_note_clicked()),
+            ft.Button(content="Save Note", on_click=lambda e: self.on_save_note_clicked()),
+            ft.Button(content="Delete Note", on_click=lambda e: self.on_delete_note_clicked()),
+            ft.Button(content="Link Note", on_click=lambda e: self.on_link_note_clicked()),
+            ft.Button(content="Generate AI Notes", on_click=lambda e: self.on_generate_ai_clicked()),
+        ], visible=False)
 
     def _build_layout(self):
         self.content = ft.Column([
             self.live_editor,
-            self.action_buttons
-        ], expand=True, spacing=10)
+        ], expand=True, spacing=0)
 
     def get_content(self) -> str:
         """Returns the current markdown content in editor."""
