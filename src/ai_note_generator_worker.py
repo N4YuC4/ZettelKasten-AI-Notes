@@ -1,44 +1,50 @@
 # ai_note_generator_worker.py
 #
-# This file defines a worker class that generates Zettelkasten-style notes from PDF content
-# using artificial intelligence (AI) and saves these notes to the database.
-# The process is executed in a separate thread to avoid freezing the GUI.
+# Worker class that generates Zettelkasten-style notes from PDF content or raw text
+# using Google Gemini AI, and atomically commits notes and links to SQLite.
+# Executed in a background thread to prevent UI freezing.
 
-import os # For file path checks
-import threading # For thread management and cancellation event
-import traceback # For detailed error tracing
-from gemini_api_client import GeminiApiClient, GeminiApiError, GeminiAuthError, GeminiRateLimitError # For interacting with the Gemini API
-import note_manager # For note management functions (saving, title sanitization)
-import database_manager # For database operations
-import pdf_processor # For PDF text extraction if given a file path
-from logger import log_debug, log_error # For logging functions
-from uuid import uuid4 # For generating unique IDs
-from datetime import datetime # For timestamps
+import os
+import threading
+import traceback
+from uuid import uuid4
+from datetime import datetime
+from typing import Optional, Callable, List, Dict, Any
 
-# The AiNoteGeneratorWorker class executes the AI note generation process in a separate thread.
+from gemini_api_client import GeminiApiClient, GeminiApiError, GeminiAuthError, GeminiRateLimitError
+import note_service
+import database_manager
+import pdf_processor
+from logger import log_debug, log_error
+
+
 class AiNoteGeneratorWorker:
-    # The __init__ method initializes the worker object.
-    # extracted_text: The text extracted from the PDF or the path to a PDF file.
-    # on_finished: Callback function triggered when notes generation completes successfully.
-    # on_error: Callback function triggered when an error occurs.
-    def __init__(self, extracted_text, on_finished=None, on_error=None):
-        self.extracted_text = extracted_text # Store text or file path
-        self.extracted_text_or_path = extracted_text # Explicit alias
+    """
+    Worker that executes the AI note generation and database persistence in a background thread.
+    Supports cancellation and atomic batch rollback.
+    """
+    def __init__(
+        self,
+        extracted_text: str,
+        on_finished: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
+        on_error: Optional[Callable[[str], None]] = None
+    ):
+        self.extracted_text = extracted_text
+        self.extracted_text_or_path = extracted_text
         self.on_finished = on_finished
         self.on_error = on_error
-        self._cancel_event = threading.Event() # Cancellation flag
+        self._cancel_event = threading.Event()
 
-    def cancel(self):
-        """Signals the worker to cleanly cancel the ongoing generation process."""
+    def cancel(self) -> None:
+        """Signals the worker to cancel the ongoing generation process."""
         self._cancel_event.set()
 
-    def is_cancelled(self):
+    def is_cancelled(self) -> bool:
         """Returns True if the worker process has been cancelled."""
         return self._cancel_event.is_set()
 
-    # The run method is the main function called when the thread starts.
-    # It contains the logic for AI note generation, saving, and linking.
-    def run(self):
+    def run(self) -> None:
+        """Main execution method for the background worker thread."""
         db_manager_worker = None
         try:
             # Check for early cancellation
@@ -83,7 +89,7 @@ class AiNoteGeneratorWorker:
                         log_error(f"Error in on_finished callback: {cb_err}")
                 return
 
-            # 4. Stage 1: Build fresh mapping of existing notes & deduplicate titles in the batch
+            # 4. Stage 1: Build fresh mapping of existing notes & disambiguate titles
             title_to_id = db_manager_worker.get_all_note_titles_and_ids()
             used_titles = set(title_to_id.keys())
             log_debug(f"DEBUG: Initial title_to_id count: {len(title_to_id)}")
@@ -93,18 +99,8 @@ class AiNoteGeneratorWorker:
                     continue
 
                 raw_title = note_data.get('title', 'Untitled Note')
-                sanitized_title = note_manager.get_sanitized_title(f"# {raw_title}")
-
-                # Disambiguate duplicate titles to preserve Zettelkasten atomicity
-                if sanitized_title in used_titles:
-                    counter = 2
-                    disambiguated = f"{sanitized_title} ({counter})"
-                    while disambiguated in used_titles:
-                        counter += 1
-                        disambiguated = f"{sanitized_title} ({counter})"
-                    final_title = disambiguated
-                else:
-                    final_title = sanitized_title
+                sanitized_title = note_service.sanitize_title(f"# {raw_title}")
+                final_title = note_service.disambiguate_title(sanitized_title, used_titles)
 
                 used_titles.add(final_title)
                 new_id = str(uuid4())
@@ -144,7 +140,7 @@ class AiNoteGeneratorWorker:
                     for target_title_raw in connections:
                         if not isinstance(target_title_raw, str):
                             continue
-                        sanitized_target_title = note_manager.get_sanitized_title(target_title_raw)
+                        sanitized_target_title = note_service.sanitize_title(target_title_raw)
                         target_id = title_to_id.get(sanitized_target_title) or title_to_id.get(target_title_raw)
                         # Avoid self-referential links and ensure target exists
                         if target_id and target_id != final_id:
@@ -219,5 +215,3 @@ class AiNoteGeneratorWorker:
                     db_manager_worker.close_connection()
                 except Exception as close_err:
                     log_error(f"Error closing DB connection: {close_err}")
-
-

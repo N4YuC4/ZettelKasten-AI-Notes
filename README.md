@@ -112,18 +112,28 @@ The mind map visualization is managed by `mind_map_widget.py`, which uses a `fle
 ```
 Zettelkasten-AI-Notes/
 ├── src/
-│   ├── ai_note_generator_worker.py # Manages AI note generation logic
-│   ├── database_manager.py         # Manages all SQLite database operations
-│   ├── gemini_api_client.py        # Interfaces with the Google Gemini API
-│   ├── main.py                     # Main application entry point and UI logic
-│   ├── note_manager.py             # Manages note-related operations (save, rename, delete, sanitize)
-│   ├── pdf_processor.py            # Extracts text content from PDF files
-│   ├── mind_map_widget.py          # The mind map visualization widget using flet.canvas
-│   └── logger.py                   # A simple logger for debugging
-├── tests/                          # Unit tests
+│   ├── ui/                         # Modular UI view components
+│   │   ├── dialog_manager.py       # Modal dialog lifecycle management
+│   │   ├── editor_workspace.py     # Markdown editor workspace & action toolbar
+│   │   ├── right_panel_view.py     # Mind Map visualization & linked notes panel
+│   │   ├── sidebar_view.py         # Category navigation & notes list sidebar
+│   │   └── splitters.py            # Draggable responsive splitter handles
+│   ├── ai_note_generator_worker.py # Background worker for AI note generation
+│   ├── app_state.py                # Centralized reactive application state
+│   ├── database_manager.py         # SQLite persistence layer and connections
+│   ├── gemini_api_client.py        # Google Gemini AI client integration
+│   ├── logger.py                   # Centralized rotating file & console logger
+│   ├── main.py                     # Application entry point and coordinator
+│   ├── markdown_editor_widget.py   # Markdown editor with Source & Reading modes
+│   ├── mind_map_widget.py          # Interactive canvas mind map visualization
+│   ├── models.py                   # Domain models and dataclasses
+│   ├── note_manager.py             # Backward-compatible note management adapter
+│   ├── note_service.py             # Core business logic and service operations
+│   └── pdf_processor.py            # Text extraction from PDF documents
+├── tests/                          # Automated pytest suite (68 tests)
 ├── .gitignore                      # Git ignore file
 ├── LICENSE                         # Project license
-├── README.md                       # Project overview and setup instructions
+├── README.md                       # Project overview and documentation
 └── requirements.txt                # Python dependencies
 ```
 

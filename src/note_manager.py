@@ -1,144 +1,43 @@
 # note_manager.py
 #
-# This file contains helper functions related to the management of Zettelkasten notes.
-# It handles operations such as cleaning note titles, saving, deleting, renaming notes, and
-# loading note metadata.
+# Backward-compatibility adapter for Zettelkasten note management.
+# Delegates core operations to note_service for clean separation of concerns.
 
-import re # For regular expressions
-import uuid # For generating unique IDs
-from logger import log_debug # For debug logging function
+from typing import Optional, List, Tuple, Set
+import note_service
+from note_service import NoteService, generate_unique_id, sanitize_title as get_sanitized_title
 
-# The generate_unique_id function creates a unique ID for new notes.
-def generate_unique_id():
-    return str(uuid.uuid4()) # Create a UUID (Universally Unique Identifier) and convert it to a string
 
-# The get_sanitized_title function extracts a cleaned title from the first non-empty line of the note content.
-# It removes Markdown headings, content in parentheses, and other Markdown formatting characters.
-def get_sanitized_title(content):
-    if not content:
-        return "Untitled Note" # Return a default title if the content is empty
+def save_note(db_manager, note_id: Optional[str], note_content: str, category_path: str = "") -> Tuple[str, str]:
+    """Saves or updates a note in the database via NoteService."""
+    service = NoteService(db_manager)
+    return service.save_note(note_id, note_content, category_path)
 
-    # Extract the first non-empty line
-    first_non_empty_line = ""
-    for line in content.split('\n'):
-        stripped = line.strip()
-        if stripped:
-            first_non_empty_line = stripped
-            break
 
-    if not first_non_empty_line:
-        return "Untitled Note" # Return default if all lines are empty
+def delete_note(db_manager, note_id: str) -> bool:
+    """Deletes a note from the database via NoteService."""
+    service = NoteService(db_manager)
+    return service.delete_note(note_id)
 
-    # 1. Remove Markdown heading syntax (e.g., #, ##, etc.) from the beginning of the line
-    sanitized_title = re.sub(r'^#+\s*', '', first_non_empty_line)
 
-    # Remove bold/italic markers
-    sanitized_title = re.sub(r'(\*\*|__|\*|_)', '', sanitized_title)
-    # Remove inline code markers
-    sanitized_title = re.sub(r'`', '', sanitized_title)
-    # Remove strikethrough markers
-    sanitized_title = re.sub(r'~~', '', sanitized_title)
-    # Remove image/link syntax (e.g., ![alt](url) or [text](url))
-    sanitized_title = re.sub(r'!\[.*?\]\(.*?\)', '', sanitized_title)
-    sanitized_title = re.sub(r'\[.*?\]\(.*?\)', '', sanitized_title)
-    # Remove remaining special characters that might be part of markdown or problematic in titles
-    sanitized_title = re.sub(r'[<>:"/\\|?*]', '', sanitized_title)
-    
-    # Remove leading/trailing whitespace that may have occurred after cleaning
-    sanitized_title = sanitized_title.strip()
+def rename_note(db_manager, note_id: str, new_title: str, category_path: str = "") -> Tuple[bool, str]:
+    """Renames a note via NoteService."""
+    service = NoteService(db_manager)
+    return service.rename_note(note_id, new_title, category_path)
 
-    return sanitized_title if sanitized_title else "Untitled Note"
 
-# The save_note function saves or updates a note in the database.
-# db_manager: The database manager object.
-# note_id: The ID of the note to be updated (if None or empty, a new note is created).
-# note_content: The content of the note.
-# category_path: The category of the note.
-def save_note(db_manager, note_id, note_content, category_path=""):
-    sanitized_title = get_sanitized_title(note_content) # Get the cleaned title from the content
-    
-    if not sanitized_title: # If the title is empty after cleaning
-        sanitized_title = "Untitled Note" # Assign a default title
+def load_all_notes_metadata(db_manager) -> Tuple[List[Tuple[str, str, str]], List[str]]:
+    """Loads metadata and categories via NoteService."""
+    service = NoteService(db_manager)
+    return service.load_all_notes_metadata()
 
-    if note_id:
-        # If note_id is provided (truthy string), update the specific note
-        db_manager.update_note(note_id, sanitized_title, note_content, category_path)
-        return note_id, sanitized_title # Return the updated note ID and title
-    else:
-        # If note_id is None or empty, generate a new UUID4 and insert
-        new_note_id = generate_unique_id() # Create a new unique ID
-        db_manager.insert_note(new_note_id, sanitized_title, note_content, category_path) # Add the new note
-        return new_note_id, sanitized_title # Return the new note ID and title
 
-# The delete_note function deletes a specific note from the database.
-# db_manager: The database manager object.
-# note_id: The ID of the note to be deleted.
-def delete_note(db_manager, note_id):
-    try:
-        db_manager.delete_note(note_id) # Delete the note from the database
-        log_debug(f"Note with ID {note_id} deleted from database.")
-        return True # Indicate success
-    except Exception as e:
-        log_debug(f"Error deleting note from database: {e}") # Log the error message
-        return False # Indicate failure
+def get_note_content(db_manager, note_id: str) -> Optional[str]:
+    """Retrieves content of a note via NoteService."""
+    service = NoteService(db_manager)
+    return service.get_note_content(note_id)
 
-# The rename_note function renames a specific note.
-# db_manager: The database manager object.
-# note_id: The ID of the note to be renamed.
-# new_title: The new title of the note.
-# category_path: The category of the note (currently not used but kept for compatibility).
-def rename_note(db_manager, note_id, new_title, category_path=""):
-    sanitized_new_title = get_sanitized_title(new_title) # Clean the new title
-    if not sanitized_new_title:
-        return False, "New title cannot be empty or result in an empty sanitized title."
 
-    note_data = db_manager.get_note(note_id) # Get the current data of the note
-    if note_data:
-        current_content = note_data[2] # The content of the note (index 2)
-        # Update the first line with the new title
-        lines = current_content.split('\n')
-        if lines:
-            lines[0] = f"# {sanitized_new_title}"
-        current_content = '\n'.join(lines)
-        # Update the note with the new title and updated content
-        db_manager.update_note(note_id, sanitized_new_title, current_content, category_path)
-        log_debug(f"Note with ID {note_id} renamed to {sanitized_new_title}.")
-        return True, sanitized_new_title # Indicate success and return the new title
-    else:
-        return False, "Note not found."
-
-# The load_all_notes_metadata function loads the metadata of all notes and all categories.
-# db_manager: The database manager object.
-def load_all_notes_metadata(db_manager):
-    notes_metadata_from_db, all_categories_from_db = db_manager.get_all_notes_metadata() # Get metadata and categories from the database
-    
-    notes_metadata = [] # List of note metadata in the format (display_title, note_id, category_path)
-    all_categories = set() # A set to store unique categories
-
-    for note_id, title, category in notes_metadata_from_db:
-        notes_metadata.append((note_id, title, category)) # Add metadata to the list
-        if category:
-            all_categories.add(category) # Add the category to the set if it exists
-            
-    return notes_metadata, sorted(list(all_categories_from_db)) # Return metadata and sorted categories
-
-# The get_note_content function returns the content of a specific note.
-# db_manager: The database manager object.
-# note_id: The ID of the note whose content is to be retrieved.
-def get_note_content(db_manager, note_id):
-    note_data = db_manager.get_note(note_id) # Get the note data
-    if note_data:
-        return note_data[2] # Return the content (index 2)
-    return None # Return None if the note is not found
-
-# The create_category function manages the category creation process.
-# In the current database schema, since categories are a field of the note,
-# this function only checks if the category name is valid.
-# category_name: The name of the category to be created.
-def create_category(category_name):
-    # In database storage, categories are just a field in the note.
-    # There is no need to create a physical directory.
-    # This function can return True if the category name is valid.
-    if category_name.strip(): # If the category name is not empty after stripping whitespace
-        return True
-    return False
+def create_category(category_name: str) -> bool:
+    """Validates category name format."""
+    return bool(category_name and category_name.strip())
