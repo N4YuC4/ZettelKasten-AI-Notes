@@ -43,9 +43,9 @@ def test_worker_atomic_batch_rollback_on_failure(temp_db, monkeypatch):
     mock_gemini_client.generate_zettelkasten_notes.return_value = notes_payload
     monkeypatch.setattr("ai_note_generator_worker.GeminiApiClient", lambda: mock_gemini_client)
     
-    def failing_bulk_links(self, links):
+    def failing_bulk_insert(self, notes_data, links_data):
         raise sqlite3.OperationalError("Simulated DB Disk Failure during Link Insertion")
-    monkeypatch.setattr(database_manager.DatabaseManager, "bulk_insert_links", failing_bulk_links)
+    monkeypatch.setattr(database_manager.DatabaseManager, "bulk_insert_notes_and_links", failing_bulk_insert)
     
     errors = []
     finished_results = []

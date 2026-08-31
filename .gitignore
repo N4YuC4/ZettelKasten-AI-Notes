@@ -5,6 +5,6 @@ __pycache__/
 .vscode/
 .idea/
 db/
-Hackathon
+docs/
 logs/debug.log
 GEMINI.md

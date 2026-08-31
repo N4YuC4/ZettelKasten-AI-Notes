@@ -182,8 +182,23 @@ class GeminiApiClient:
             GeminiRateLimitError: If rate limit / quota is exceeded.
             GeminiApiError: If generation or response parsing fails.
         """
-        if not text_content or not text_content.strip():
+        if not text_content or not str(text_content).strip():
             return []
+
+        # Sanitize prompt delimiter tags to prevent prompt injection breakouts
+        sanitized_text = (
+            str(text_content)
+            .replace("<document_content>", "")
+            .replace("</document_content>", "")
+            .strip()
+        )
+        if not sanitized_text:
+            return []
+
+        # Safe high ceiling to protect against corrupt/infinite memory consumption
+        MAX_SAFE_CHARS = 2_000_000
+        if len(sanitized_text) > MAX_SAFE_CHARS:
+            sanitized_text = sanitized_text[:MAX_SAFE_CHARS]
 
         prompt = f"""You are an AI assistant specialized in generating Zettelkasten-style notes.
 Extract key concepts, arguments, and insights from the text below.
@@ -202,7 +217,7 @@ Example structure:
 
 Text to process:
 <document_content>
-{text_content}
+{sanitized_text}
 </document_content>
 """
         try:

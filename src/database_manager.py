@@ -193,19 +193,15 @@ class DatabaseManager:
             return False
 
     def delete_category(self, category_name: str) -> bool:
-        """Deletes all notes in a category and their links."""
+        """Deletes all notes in a category and their links using subqueries."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT id FROM notes WHERE category = ?", (category_name,))
-                note_ids = [row[0] for row in cursor.fetchall()]
-                if note_ids:
-                    placeholders = ', '.join(['?'] * len(note_ids))
-                    cursor.execute(f"""
-                        DELETE FROM note_links
-                        WHERE source_note_id IN ({placeholders})
-                           OR target_note_id IN ({placeholders})
-                    """, note_ids + note_ids)
+                cursor.execute("""
+                    DELETE FROM note_links
+                    WHERE source_note_id IN (SELECT id FROM notes WHERE category = ?)
+                       OR target_note_id IN (SELECT id FROM notes WHERE category = ?)
+                """, (category_name, category_name))
                 cursor.execute("DELETE FROM notes WHERE category = ?", (category_name,))
                 return True
         except sqlite3.Error as e:
@@ -255,10 +251,9 @@ class DatabaseManager:
     def save_note(self, note_id: Optional[str], note_content: str, category: str = "") -> Tuple[str, str]:
         """Direct DB helper to save or update note."""
         from uuid import uuid4
+        import note_service
         now = datetime.now().isoformat()
-        title = note_content.split('\n')[0].strip() if note_content else "Untitled Note"
-        if not title:
-            title = "Untitled Note"
+        title = note_service.sanitize_title(note_content)
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -317,6 +312,25 @@ class DatabaseManager:
                 """, links_data)
         except sqlite3.Error as e:
             log_error(f"Database error during bulk insert links: {e}")
+            raise e
+
+    def bulk_insert_notes_and_links(self, notes_data: List[Tuple], links_data: List[Tuple[str, str]]) -> None:
+        """Batch inserts note and link tuples atomically within a single transaction."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if notes_data:
+                    cursor.executemany("""
+                        INSERT INTO notes (id, title, content, category, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, notes_data)
+                if links_data:
+                    cursor.executemany("""
+                        INSERT OR IGNORE INTO note_links (source_note_id, target_note_id)
+                        VALUES (?, ?)
+                    """, links_data)
+        except sqlite3.Error as e:
+            log_error(f"Database error during atomic bulk insert notes and links: {e}")
             raise e
 
     def close_connection(self) -> None:

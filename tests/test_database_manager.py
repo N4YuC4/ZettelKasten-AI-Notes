@@ -144,3 +144,20 @@ def test_get_all_notes_metadata(temp_db):
     assert "" not in categories
 
 
+def test_delete_category_subquery_scalability(temp_db):
+    now = "2026-08-31T00:00:00"
+    # Insert 50 notes under "BigCat"
+    notes = [(f"big-{i}", f"Big Note {i}", f"Content {i}", "BigCat", now, now) for i in range(50)]
+    links = [(f"big-{i}", f"big-{i+1}") for i in range(49)]
+    temp_db.bulk_insert_notes_and_links(notes, links)
+
+    assert temp_db.note_count("BigCat") == 50
+    assert len(temp_db.get_all_note_links()) == 49
+
+    success = temp_db.delete_category("BigCat")
+    assert success is True
+    assert temp_db.note_count("BigCat") == 0
+    assert len(temp_db.get_all_note_links()) == 0
+
+
+

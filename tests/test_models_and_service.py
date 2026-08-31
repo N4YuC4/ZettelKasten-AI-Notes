@@ -172,3 +172,66 @@ def test_app_state_listeners():
     state.set_dirty(False)
     assert len(events) == 6  # No additional events after removal
 
+
+def test_process_markdown_wikilinks_ignores_code_blocks_and_inline_code():
+    text = (
+        "Here is a note with [[Normal WikiLink]].\n\n"
+        "```python\n"
+        "# This is code with [[Code Block WikiLink]]\n"
+        "matrix[[0]]\n"
+        "```\n\n"
+        "And inline code `[[Inline WikiLink]]` should not change.\n"
+        "Finally [[Another WikiLink|Alias]]."
+    )
+    processed = note_service.process_markdown_wikilinks(text)
+    assert "[🔗 Normal WikiLink](zettel://note/Normal%20WikiLink)" in processed
+    assert "[🔗 Alias](zettel://note/Another%20WikiLink)" in processed
+    # Verify code block was not mutated
+    assert "[[Code Block WikiLink]]" in processed
+    assert "matrix[[0]]" in processed
+    assert "`[[Inline WikiLink]]`" in processed
+
+
+def test_preserve_single_linebreaks_preserves_tables_and_headings():
+    table_text = (
+        "# Main Heading\n"
+        "| Header 1 | Header 2 |\n"
+        "| :--- | :--- |\n"
+        "| Cell A | Cell B |\n\n"
+        "Normal line 1\n"
+        "Normal line 2"
+    )
+    res = note_service.preserve_single_linebreaks(table_text)
+    lines = res.split("\n")
+    assert lines[0] == "# Main Heading"  # No trailing double spaces on headings
+    assert lines[1] == "| Header 1 | Header 2 |"  # No trailing double spaces on tables
+    assert lines[2] == "| :--- | :--- |"
+    assert lines[3] == "| Cell A | Cell B |"
+    assert lines[5] == "Normal line 1  "
+
+
+def test_rename_note_with_none_or_leading_blank_lines(temp_db):
+    service = NoteService(temp_db)
+    # 1. Test None content in DB
+    cursor = temp_db.conn.cursor()
+    cursor.execute(
+        "INSERT INTO notes (id, title, content, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("none-id", "None Title", None, "General", "2026-08-31", "2026-08-31")
+    )
+    temp_db.conn.commit()
+
+    success, new_title = service.rename_note("none-id", "Fixed None Title")
+    assert success is True
+    assert new_title == "Fixed None Title"
+    assert service.get_note_content("none-id") == "# Fixed None Title"
+
+    # 2. Test leading blank lines
+    nid, _ = service.save_note(None, "\n\n  \n# Original Header\nSome details here", "General")
+    success2, new_title2 = service.rename_note(nid, "New Clean Header")
+    assert success2 is True
+    content2 = service.get_note_content(nid)
+    lines2 = content2.splitlines()
+    assert lines2[3] == "# New Clean Header"
+    assert "Original Header" not in content2
+
+

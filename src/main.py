@@ -484,11 +484,21 @@ def main(page: ft.Page):
             show_snack_bar(f"Failed to unlink note: {target_title}.", color=ft.Colors.ERROR)
 
     def handle_save_api_key(api_key: str):
-        if api_key:
-            os.environ["GEMINI_API_KEY"] = api_key
-            dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
-            set_key(dotenv_path, "GEMINI_API_KEY", api_key)
+        cleaned_key = (api_key or "").strip()
+        dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
+        if cleaned_key:
+            os.environ["GEMINI_API_KEY"] = cleaned_key
+            set_key(dotenv_path, "GEMINI_API_KEY", cleaned_key)
             show_snack_bar("Gemini API Key saved successfully.")
+        else:
+            os.environ.pop("GEMINI_API_KEY", None)
+            if os.path.exists(dotenv_path):
+                from dotenv import unset_key
+                try:
+                    unset_key(dotenv_path, "GEMINI_API_KEY")
+                except Exception:
+                    pass
+            show_snack_bar("Gemini API Key removed.")
 
     # 7. PDF AI Generation Worker Dispatch
     pdf_file_picker = ft.FilePicker()

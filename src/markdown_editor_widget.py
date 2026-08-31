@@ -329,16 +329,24 @@ class MarkdownEditorWidget(ft.Container):
         _safe_update(self.stats_text)
 
     def _handle_link_tap(self, e):
-        link_url = e.data
+        link_url = str(e.data).strip() if hasattr(e, 'data') and e.data else ""
+        if not link_url:
+            return
+
         if link_url.startswith("zettel://note/"):
             encoded_title = link_url[len("zettel://note/"):]
             note_title = urllib.parse.unquote(encoded_title)
             if self.on_wikilink_clicked:
                 self.on_wikilink_clicked(note_title)
         else:
-            pg = _get_page(self)
-            if pg:
-                pg.launch_url(link_url)
+            try:
+                parsed = urllib.parse.urlsplit(link_url)
+                if parsed.scheme.lower() in ("http", "https", "mailto"):
+                    pg = _get_page(self)
+                    if pg:
+                        pg.launch_url(link_url)
+            except Exception:
+                pass
 
     # --- Biçimlendirme Araçları ---
 

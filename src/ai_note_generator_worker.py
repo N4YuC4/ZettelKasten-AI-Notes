@@ -165,27 +165,12 @@ class AiNoteGeneratorWorker:
                 log_debug("DEBUG: AiNoteGeneratorWorker cancelled before database commit.")
                 return
 
-            # 6. Stage 3: Atomic database insertion with rollback
-            inserted_ids = []
+            # 6. Stage 3: Atomic single-transaction database insertion
             try:
-                if notes_to_insert:
-                    db_manager_worker.bulk_insert_notes(notes_to_insert)
-                    inserted_ids = [n[0] for n in notes_to_insert]
-                    log_debug(f"DEBUG: Bulk inserted {len(notes_to_insert)} notes.")
-
-                if links_to_insert:
-                    db_manager_worker.bulk_insert_links(links_to_insert)
-                    log_debug(f"DEBUG: Bulk inserted {len(links_to_insert)} links.")
+                db_manager_worker.bulk_insert_notes_and_links(notes_to_insert, links_to_insert)
+                log_debug(f"DEBUG: Atomically inserted {len(notes_to_insert)} notes and {len(links_to_insert)} links.")
             except Exception as db_err:
-                # Rollback partial note insertions if subsequent batch operations fail
-                if inserted_ids:
-                    try:
-                        cursor = db_manager_worker.conn.cursor()
-                        cursor.executemany("DELETE FROM notes WHERE id = ?", [(nid,) for nid in inserted_ids])
-                        db_manager_worker.conn.commit()
-                        log_debug(f"DEBUG: Rolled back {len(inserted_ids)} partial notes on error.")
-                    except Exception as rollback_err:
-                        log_error(f"Error during rollback cleanup: {rollback_err}")
+                log_error(f"Database error during atomic batch insertion: {db_err}")
                 raise db_err
 
             # 7. Safe callback dispatch

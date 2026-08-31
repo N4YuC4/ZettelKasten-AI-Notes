@@ -26,7 +26,7 @@ def sanitize_title(content: str) -> str:
         return "Untitled Note"
 
     first_non_empty_line = ""
-    for line in content.split('\n'):
+    for line in content.splitlines():
         stripped = line.strip()
         if stripped:
             first_non_empty_line = stripped
@@ -78,8 +78,8 @@ def disambiguate_title(base_title: str, existing_titles: Set[str]) -> str:
 
 def preserve_single_linebreaks(text: str) -> str:
     """
-    Adds two spaces (Markdown hard break) at line ends outside code blocks
-    so that single newlines render properly in Markdown views.
+    Adds two spaces (Markdown hard break) at line ends outside code blocks and tables
+    so that single newlines render properly in Markdown views without breaking table rows.
     """
     if not text:
         return ""
@@ -87,13 +87,15 @@ def preserve_single_linebreaks(text: str) -> str:
     processed = []
     in_code = False
     for line in lines:
-        if line.strip().startswith("```"):
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
             in_code = not in_code
             processed.append(line)
         elif in_code:
             processed.append(line)
         else:
-            if line.strip() and not line.endswith("  "):
+            # Do not append trailing spaces to table rows (|...|), headings (#), or blank lines
+            if stripped and not stripped.startswith("|") and not stripped.startswith("#") and not line.endswith("  "):
                 processed.append(line + "  ")
             else:
                 processed.append(line)
@@ -104,6 +106,7 @@ def process_markdown_wikilinks(text: str) -> str:
     """
     Converts [[Note Title]] or [[Target Note|Custom Alias]] WikiLinks
     into standard Markdown links using the zettel://note/ protocol.
+    Guarantees code blocks (```...``` and `...`) are never mutated.
     """
     if not text:
         return ""
@@ -121,8 +124,13 @@ def process_markdown_wikilinks(text: str) -> str:
         encoded_target = urllib.parse.quote(target)
         return f"[🔗 {alias}](zettel://note/{encoded_target})"
 
-    text = re.sub(r'\[\[(.*?)\]\]', replace_wikilink, text)
-    return preserve_single_linebreaks(text)
+    # Split text by code blocks (```...```) and inline code (`...`)
+    parts = re.split(r'(```[\s\S]*?```|`[^`\n]+`)', text)
+    for i in range(0, len(parts), 2):
+        parts[i] = re.sub(r'\[\[(.*?)\]\]', replace_wikilink, parts[i])
+        parts[i] = preserve_single_linebreaks(parts[i])
+
+    return "".join(parts)
 
 
 def calculate_document_stats(text: str) -> DocumentStats:
@@ -206,13 +214,24 @@ class NoteService:
         existing_category = note_data[3] if isinstance(note_data, (tuple, list)) else getattr(note_data, "category", "")
         cat_to_save = category if (category is not None and category != "") else (existing_category or "")
 
-        # Update the first line of the content with new heading
-        current_content = note_data[2] if isinstance(note_data, (tuple, list)) else note_data.content
+        # Safely extract and update content
+        current_content = ""
+        if isinstance(note_data, (tuple, list)):
+            current_content = note_data[2] if note_data[2] is not None else ""
+        elif hasattr(note_data, "content") and note_data.content is not None:
+            current_content = note_data.content
+
         lines = current_content.split('\n')
-        if lines:
-            lines[0] = f"# {sanitized}"
-        else:
+        heading_updated = False
+        for idx, line in enumerate(lines):
+            if line.strip():
+                lines[idx] = f"# {sanitized}"
+                heading_updated = True
+                break
+
+        if not heading_updated:
             lines = [f"# {sanitized}"]
+
         updated_content = '\n'.join(lines)
 
         self.db.update_note(note_id, sanitized, updated_content, cat_to_save)

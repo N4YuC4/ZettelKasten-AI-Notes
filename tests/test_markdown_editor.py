@@ -5,6 +5,7 @@
 import pytest
 import os
 import sys
+from unittest.mock import MagicMock
 
 # Ensure src/ is on python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
@@ -164,3 +165,22 @@ def test_wikilink_tap_dispatch():
     editor._handle_link_tap(FakeEvent())
     assert len(clicked) == 1
     assert clicked[0] == "My Target Note"
+
+
+def test_link_tap_uri_allowlist():
+    editor = MarkdownEditorWidget()
+    mock_page = MagicMock()
+    editor._get_page = MagicMock(return_value=mock_page)
+
+    class FakeEvent:
+        def __init__(self, d):
+            self.data = d
+
+    # 1. Trusted HTTPS scheme - should invoke launch_url
+    editor._handle_link_tap(FakeEvent("https://example.com/guide"))
+    # 2. Blocked file/javascript/data schemes - should not crash or call launch_url for blocked schemes
+    editor._handle_link_tap(FakeEvent("file:///etc/passwd"))
+    editor._handle_link_tap(FakeEvent("javascript:alert(1)"))
+    editor._handle_link_tap(FakeEvent("data:text/html,malicious"))
+    editor._handle_link_tap(FakeEvent(""))
+
