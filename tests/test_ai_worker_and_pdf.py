@@ -288,3 +288,130 @@ def test_worker_gemini_typed_errors(monkeypatch):
     assert len(errors) == 1
     assert "Auth Failure" in errors[0]
 
+
+def test_resolve_target_id_strict_matching():
+    from ai_note_generator_worker import _resolve_target_id
+    batch_map = {
+        "Binaural Vuruşlar": "id-1",
+        "Transkraniyal Manyetik Stimülasyon (TMS)": "id-2",
+        "İ-Dozlar": "id-3",
+    }
+    global_map = {
+        "Plasebo Etkisi": "id-4",
+    }
+
+    # 1. Verbatim exact matches
+    assert _resolve_target_id("Binaural Vuruşlar", batch_map, global_map) == "id-1"
+    assert _resolve_target_id("Plasebo Etkisi", batch_map, global_map) == "id-4"
+
+    # 2. Markdown header sanitized exact matches
+    assert _resolve_target_id("# Binaural Vuruşlar", batch_map, global_map) == "id-1"
+    assert _resolve_target_id("## Plasebo Etkisi  ", batch_map, global_map) == "id-4"
+
+    # 3. Case-folded exact match
+    assert _resolve_target_id("binaural vuruşlar", batch_map, global_map) == "id-1"
+
+    # 4. Strict rejection of substrings / prefixes / partial fuzzy matches to avoid false graph links
+    # 'Binaural' is only part of 'Binaural Vuruşlar' -> must return None
+    assert _resolve_target_id("Binaural", batch_map, global_map) is None
+    # 'Transkraniyal Manyetik Stimülasyon' missing '(TMS)' -> must return None
+    assert _resolve_target_id("Transkraniyal Manyetik Stimülasyon", batch_map, global_map) is None
+    # Dissimilar or unknown target returns None
+    assert _resolve_target_id("Doğrudan Beyin Stimülasyonu", batch_map, global_map) is None
+    assert _resolve_target_id("Tamamen Alakasız Konu", batch_map, global_map) is None
+
+
+def test_worker_unloads_cached_model_on_finish(temp_db, monkeypatch):
+    mock_gemini_client = MagicMock()
+    mock_gemini_client.generate_zettelkasten_notes.return_value = []
+    monkeypatch.setattr("ai_note_generator_worker.GeminiApiClient", lambda: mock_gemini_client)
+
+    unload_called = False
+    def mock_unload():
+        nonlocal unload_called
+        unload_called = True
+
+    from local_gguf_client import LocalGgufClient
+    monkeypatch.setattr(LocalGgufClient, "unload_cached_model", mock_unload)
+
+    worker = AiNoteGeneratorWorker("dummy text", on_finished=None, on_error=None)
+    worker.run()
+
+    assert unload_called is True
+
+
+def test_worker_passes_n_gpu_layers_based_on_setting(temp_db, monkeypatch):
+    import database_manager
+    db = database_manager.DatabaseManager(init_tables=False)
+    db.set_setting("AI_PROVIDER", "local")
+    db.set_setting("GPU_ACCELERATION", "False")
+
+    mock_model_info = MagicMock()
+    mock_model_info.display_name = "Mock Model"
+    monkeypatch.setattr("local_models_catalog.get_model_by_id", lambda mid: mock_model_info)
+    monkeypatch.setattr("model_downloader.ModelDownloader.is_model_downloaded", lambda mi, md: True)
+    monkeypatch.setattr("model_downloader.ModelDownloader.get_model_path", lambda mi, md: "/dummy/path.gguf")
+
+    passed_n_gpu_layers = []
+
+    class MockLocalClient:
+        def __init__(self, model_path, n_gpu_layers=-1):
+            passed_n_gpu_layers.append(n_gpu_layers)
+
+        def generate_zettelkasten_notes(self, text, *args, **kwargs):
+            return []
+
+        @classmethod
+        def unload_cached_model(cls):
+            pass
+
+    monkeypatch.setattr("ai_note_generator_worker.LocalGgufClient", MockLocalClient)
+
+    # 1. GPU_ACCELERATION is False -> n_gpu_layers=0
+    worker = AiNoteGeneratorWorker("dummy text", on_finished=None, on_error=None)
+    worker.run()
+    assert passed_n_gpu_layers == [0]
+
+    # 2. GPU_ACCELERATION is True -> n_gpu_layers=-1
+    db.set_setting("GPU_ACCELERATION", "True")
+    worker2 = AiNoteGeneratorWorker("dummy text", on_finished=None, on_error=None)
+    worker2.run()
+    assert passed_n_gpu_layers == [0, -1]
+
+
+def test_worker_reports_progress(temp_db, monkeypatch):
+    mock_gemini_client = MagicMock()
+    mock_gemini_client.generate_zettelkasten_notes.return_value = [
+        {"title": "Note 1", "content": "Content 1", "connections": []}
+    ]
+    monkeypatch.setattr("ai_note_generator_worker.GeminiApiClient", lambda: mock_gemini_client)
+
+    progress_log = []
+    worker = AiNoteGeneratorWorker(
+        "sample text",
+        on_finished=None,
+        on_error=None,
+        on_progress=lambda msg: progress_log.append(msg)
+    )
+    worker.run()
+    assert len(progress_log) > 0
+    assert any("Metin" in p for p in progress_log)
+
+
+def test_worker_cancel_before_run(temp_db):
+    finished = []
+    errors = []
+    worker = AiNoteGeneratorWorker(
+        "sample text",
+        on_finished=lambda notes: finished.append(notes),
+        on_error=lambda err: errors.append(err)
+    )
+    worker.cancel()
+    assert worker.is_cancelled() is True
+    worker.run()
+    assert len(finished) == 0
+    assert len(errors) == 0
+
+
+
+

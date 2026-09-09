@@ -240,4 +240,38 @@ def test_editor_workspace_clean_layout():
     assert workspace.content.controls[0] == workspace.live_editor
 
 
+def test_dialog_manager_settings_and_model_manager():
+    mock_page = MagicMock()
+    mock_page.overlay = []
+
+    dm = DialogManager(mock_page)
+
+    saved_settings = []
+    dm.show_settings_dialog(
+        theme_btn=ft.IconButton(icon=ft.Icons.DARK_MODE),
+        auto_save_switch=ft.Switch(),
+        current_ai_provider="local",
+        current_active_model_id="qwen-3.5-4b",
+        on_save_settings=lambda key, prov, mid, gpu: saved_settings.append((key, prov, mid, gpu)),
+        on_open_model_manager=lambda: None,
+        current_gpu_acceleration=True
+    )
+    assert dm.settings_dialog.open is True
+
+    # Trigger save action
+    save_btn = dm.settings_dialog.actions[0]
+    save_btn.on_click(None)
+    assert len(saved_settings) == 1
+    assert saved_settings[0][1:] == ("local", "qwen-3.5-4b", True)
+
+    selected_model = []
+    dm.show_model_manager_dialog(
+        models_dir="/tmp/test_models",
+        active_model_id="qwen-3.5-4b",
+        on_select_model=lambda mid: selected_model.append(mid)
+    )
+    assert dm.model_manager_dialog.open is True
+
+
+
 

@@ -4,6 +4,14 @@
 # Wires together AppState, NoteService, DialogManager, and responsive modular UI components.
 
 import os
+
+# Prevent Vulkan loader from injecting desktop presentation and implicit layers (like NVIDIA Optimus / presentation layers).
+# In multi-threaded desktop environments (Wayland/GTK/Flet), these layers inject GLX/presentation mutexes that cause
+# fatal glibc priority protection assertions (tpp.c:83) and Wayland presentation deadlocks during headless LLM compute.
+os.environ["VK_LOADER_LAYERS_DISABLE"] = "*"
+os.environ["DISABLE_LAYER_NV_OPTIMUS_1"] = "1"
+os.environ["DISABLE_LAYER_NV_PRESENT_1"] = "1"
+
 import asyncio
 import threading
 import flet as ft
@@ -11,10 +19,17 @@ from dotenv import set_key
 from typing import Optional
 
 from logger import log_debug, log_error
+from hardware_checker import HardwareChecker
+
+# Configure headless Vulkan environment and route to discrete GPU
+HardwareChecker.configure_vulkan_environment()
+
 import database_manager
 from note_service import NoteService, sanitize_title, disambiguate_title
 import pdf_processor
 from ai_note_generator_worker import AiNoteGeneratorWorker
+from local_gguf_client import LocalGgufClient
+import local_models_catalog
 from app_state import AppState
 from ui import DialogManager, SidebarView, RightPanelView, EditorWorkspaceView, create_vertical_splitter
 
@@ -278,11 +293,7 @@ def main(page: ft.Page):
             note_title=title,
             on_confirm=lambda: handle_delete_note(nid, title)
         ),
-        on_settings_clicked=lambda: dialog_manager.show_settings_dialog(
-            theme_btn=theme_btn,
-            auto_save_switch=auto_save_switch,
-            on_save_api_key=handle_save_api_key
-        ),
+        on_settings_clicked=lambda: handle_open_settings(),
         on_collapse_clicked=toggle_sidebar
     )
 
@@ -483,13 +494,13 @@ def main(page: ft.Page):
         else:
             show_snack_bar(f"Failed to unlink note: {target_title}.", color=ft.Colors.ERROR)
 
-    def handle_save_api_key(api_key: str):
+    def handle_save_settings(api_key: str, ai_provider: str, active_model_id: str, gpu_acceleration: bool = True):
+        # 1. Save Gemini API key to .env
         cleaned_key = (api_key or "").strip()
         dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
         if cleaned_key:
             os.environ["GEMINI_API_KEY"] = cleaned_key
             set_key(dotenv_path, "GEMINI_API_KEY", cleaned_key)
-            show_snack_bar("Gemini API Key saved successfully.")
         else:
             os.environ.pop("GEMINI_API_KEY", None)
             if os.path.exists(dotenv_path):
@@ -498,7 +509,44 @@ def main(page: ft.Page):
                     unset_key(dotenv_path, "GEMINI_API_KEY")
                 except Exception:
                     pass
-            show_snack_bar("Gemini API Key removed.")
+
+        # 2. Save AI Provider, Local Model & GPU Acceleration in settings database
+        db_manager.set_setting("AI_PROVIDER", ai_provider)
+        db_manager.set_setting("ACTIVE_LOCAL_MODEL", active_model_id)
+        db_manager.set_setting("GPU_ACCELERATION", "True" if gpu_acceleration else "False")
+
+        prov_title = "Google Gemini" if ai_provider == "gemini" else "Lokal GGUF"
+        gpu_status = "Açık" if gpu_acceleration else "Kapalı"
+        show_snack_bar(f"Ayarlar kaydedildi. (Sağlayıcı: {prov_title}, GPU: {gpu_status})")
+
+    def handle_open_model_manager():
+        models_dir = db_manager.get_setting("MODELS_DIR") or local_models_catalog.get_default_models_dir()
+        active_model_id = db_manager.get_setting("ACTIVE_LOCAL_MODEL") or local_models_catalog.DEFAULT_MODEL_ID
+        dialog_manager.show_model_manager_dialog(
+            models_dir=models_dir,
+            active_model_id=active_model_id,
+            on_select_model=lambda mid: (
+                db_manager.set_setting("ACTIVE_LOCAL_MODEL", mid),
+                show_snack_bar(f"Aktif model seçildi: {local_models_catalog.get_model_by_id(mid).display_name if local_models_catalog.get_model_by_id(mid) else mid}")
+            ),
+            on_model_deleted=lambda mid: show_snack_bar("Model dosyası silindi.")
+        )
+
+    def handle_open_settings():
+        try:
+            log_debug("Opening settings dialog...")
+            dialog_manager.show_settings_dialog(
+                theme_btn=theme_btn,
+                auto_save_switch=auto_save_switch,
+                current_ai_provider=db_manager.get_setting("AI_PROVIDER") or "gemini",
+                current_active_model_id=db_manager.get_setting("ACTIVE_LOCAL_MODEL") or local_models_catalog.DEFAULT_MODEL_ID,
+                current_gpu_acceleration=(db_manager.get_setting("GPU_ACCELERATION") != "False"),
+                on_save_settings=handle_save_settings,
+                on_open_model_manager=handle_open_model_manager
+            )
+        except Exception as ex:
+            log_error(f"Error opening settings dialog: {ex}")
+            show_snack_bar(f"Ayarlar açılırken hata oluştu: {ex}", color=ft.Colors.ERROR)
 
     # 7. PDF AI Generation Worker Dispatch
     pdf_file_picker = ft.FilePicker()
@@ -507,53 +555,76 @@ def main(page: ft.Page):
     else:
         page.overlay.append(pdf_file_picker)
 
+    active_worker: Optional[AiNoteGeneratorWorker] = None
+
+    def cancel_worker():
+        nonlocal active_worker
+        if active_worker:
+            log_debug("User requested cancellation of AI note generation.")
+            active_worker.cancel()
+            active_worker = None
+        try:
+            LocalGgufClient.unload_cached_model()
+        except Exception as e:
+            log_error(f"Error unloading cached model on cancel: {e}")
+        dialog_manager.hide_loading()
+        show_snack_bar("Not çıkarma işlemi iptal edildi.", color=ft.Colors.TERTIARY)
+
     def handle_ai_finished(generated_notes):
+        nonlocal active_worker
+        active_worker = None
         dialog_manager.hide_loading()
         if generated_notes:
             state.set_category_filter("")
             right_panel.mind_map_widget.invalidate_cache()
             refresh_categories("")
             refresh_notes("")
-            show_snack_bar(f"{len(generated_notes)} notes were successfully generated and saved!")
+            show_snack_bar(f"{len(generated_notes)} not başarıyla üretildi ve kaydedildi!")
         else:
-            show_snack_bar("No notes were generated by the AI.", color=ft.Colors.TERTIARY)
+            show_snack_bar("Yapay zeka tarafından not üretilemedi.", color=ft.Colors.TERTIARY)
 
     def handle_ai_error(err_msg: str):
+        nonlocal active_worker
+        active_worker = None
         dialog_manager.hide_loading()
-        dialog_manager.show_error("AI Note Generation Error", f"An error occurred during AI note generation:\n{err_msg}")
-        show_snack_bar(f"Error: {err_msg}", color=ft.Colors.ERROR)
+        dialog_manager.show_error("AI Not Çıkarma Hatası", f"Not çıkarma sırasında bir hata oluştu:\n{err_msg}")
+        show_snack_bar(f"Hata: {err_msg}", color=ft.Colors.ERROR)
 
     async def trigger_pdf_generation(e=None):
+        nonlocal active_worker
         files = await pdf_file_picker.pick_files(
-            dialog_title="Select PDF File",
+            dialog_title="PDF Dosyası Seç",
             allowed_extensions=["pdf"]
         )
         if files:
             pdf_path = files[0].path
             dialog_manager.show_loading(
-                "Generating AI Notes From PDF",
-                "Extracting text from PDF... This may take a moment."
+                title="PDF'ten Not Çıkarılıyor",
+                message="PDF'ten metin çıkarılıyor... Lütfen bekleyiniz.",
+                on_cancel=cancel_worker
             )
             try:
                 extracted_text = pdf_processor.extract_text_from_pdf(pdf_path)
             except Exception as ex:
                 dialog_manager.hide_loading()
-                show_snack_bar(f"Failed to read PDF: {ex}", color=ft.Colors.ERROR)
+                show_snack_bar(f"PDF okunamadı: {ex}", color=ft.Colors.ERROR)
                 return
 
             if extracted_text and extracted_text.strip():
-                dialog_manager.update_loading_message("Generating notes with AI... This may take longer.")
+                dialog_manager.update_loading_message("Notlar üretiliyor... Lütfen bekleyiniz.")
                 worker = AiNoteGeneratorWorker(
                     extracted_text,
                     on_finished=handle_ai_finished,
-                    on_error=handle_ai_error
+                    on_error=handle_ai_error,
+                    on_progress=lambda msg: dialog_manager.update_loading_message(msg)
                 )
-                threading.Thread(target=worker.run, daemon=True).start()
+                active_worker = worker
+                page.run_thread(worker.run)
             else:
                 dialog_manager.hide_loading()
-                show_snack_bar("Selected PDF file is empty or contains no readable text.", color=ft.Colors.ERROR)
+                show_snack_bar("Seçilen PDF dosyası boş veya okunabilir metin içermiyor.", color=ft.Colors.ERROR)
         else:
-            show_snack_bar("No PDF file selected.", color=ft.Colors.TERTIARY)
+            show_snack_bar("PDF dosyası seçilmedi.", color=ft.Colors.TERTIARY)
 
     # 8. Responsive Layout Controllers & Splitters with Narrow Rail Mode
     def on_left_drag(e: ft.DragUpdateEvent):

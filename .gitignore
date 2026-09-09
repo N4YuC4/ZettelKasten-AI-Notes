@@ -6,5 +6,5 @@ __pycache__/
 .idea/
 db/
 docs/
-logs/debug.log
+logs/
 GEMINI.md

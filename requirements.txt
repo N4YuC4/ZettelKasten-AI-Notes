@@ -1,6 +1,13 @@
+# Vulkan GPU Acceleration wheel index for llama-cpp-python
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan
+
 flet
 python-dotenv
 markdown
 google-genai
 pypdf
 pygraphviz
+llama-cpp-python
+psutil
+requests
+
