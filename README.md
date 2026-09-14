@@ -4,7 +4,7 @@
 [![Flet 0.86.5](https://img.shields.io/badge/Flet-0.86.5-7B1FA2.svg?logo=flutter&logoColor=white)](https://flet.dev/)
 [![SQLite WAL](https://img.shields.io/badge/SQLite-WAL%20Mode-003B57.svg?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Vulkan Accelerated](https://img.shields.io/badge/Inference-Vulkan%20GPU-red.svg?logo=vulkan&logoColor=white)](https://www.vulkan.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 A powerful, privacy-first desktop knowledge management system implementing the **Zettelkasten** methodology. Built with **Python 3.13** and **Flet** (Flutter-backed desktop UI), it features advanced Markdown editing with live preview, an interactive Canvas Mind Map, local SQLite storage with WAL mode, and a **Dual AI Engine** that extracts structured atomic notes and semantic graph connections from PDF documents using either **Google Gemini API** or **offline local GGUF models** with hardware-accelerated Vulkan compute.
 
@@ -246,7 +246,7 @@ Zettelkasten-AI-Notes/
 │   ├── test_note_manager.py
 │   └── test_ui_components.py
 ├── requirements.txt                # Project dependencies
-├── LICENSE                         # MIT License
+├── LICENSE                         # GNU General Public License v3.0
 └── README.md                       # Project documentation
 ```
 
@@ -285,4 +285,4 @@ Contributions, feature requests, and bug reports are warmly welcome!
 
 ## 📄 License
 
-Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more information.
+Distributed under the **GNU General Public License v3.0 (GPLv3)**. See [`LICENSE`](LICENSE) for more information.
