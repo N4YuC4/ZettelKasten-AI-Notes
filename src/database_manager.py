@@ -26,19 +26,75 @@ class DatabaseManager:
             os.makedirs(dir_name, exist_ok=True)
         self._local = threading.local()
         if init_tables:
-            self.create_notes_table()
-            self.create_note_links_table()
-            self._create_settings_table()
+            self.ensure_schema()
+
+    def _init_schema(self, connection: sqlite3.Connection) -> None:
+        """Ensures all tables and indexes exist using CREATE TABLE IF NOT EXISTS, migrating legacy schema if needed."""
+        cursor = connection.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT,
+                collection TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        # Automated backward-compatible migration: Rename 'category' column to 'collection' if present
+        cursor.execute("PRAGMA table_info(notes);")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "category" in columns and "collection" not in columns:
+            cursor.execute("ALTER TABLE notes RENAME COLUMN category TO collection;")
+            cursor.execute("DROP INDEX IF EXISTS idx_notes_category;")
+
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_collection ON notes(collection);")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS note_links (
+                source_note_id TEXT NOT NULL,
+                target_note_id TEXT NOT NULL,
+                PRIMARY KEY (source_note_id, target_note_id),
+                FOREIGN KEY (source_note_id) REFERENCES notes(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_note_id) REFERENCES notes(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_source ON note_links(source_note_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_target ON note_links(target_note_id);")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        connection.commit()
+
+    def ensure_schema(self) -> None:
+        """Ensures all tables and indexes exist on the current connection."""
+        self._init_schema(self.conn)
 
     @property
     def conn(self) -> sqlite3.Connection:
         """Returns a thread-local SQLite connection configured with WAL and busy timeout."""
-        if not hasattr(self._local, 'conn') or self._local.conn is None:
+        conn = getattr(self._local, 'conn', None)
+        # Check if the DB file was deleted on disk behind an existing connection
+        if conn is not None and not os.path.exists(self.db_path):
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
+            conn = None
+
+        if conn is None:
+            dir_name = os.path.dirname(self.db_path)
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
             connection = sqlite3.connect(self.db_path)
             connection.execute("PRAGMA journal_mode = WAL;")
             connection.execute("PRAGMA foreign_keys = ON;")
             connection.execute("PRAGMA busy_timeout = 5000;")
             self._local.conn = connection
+            self._init_schema(connection)
         return self._local.conn
 
     def get_connection(self) -> sqlite3.Connection:
@@ -70,7 +126,7 @@ class DatabaseManager:
             cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
     def create_notes_table(self) -> None:
-        """Creates the notes table and category index."""
+        """Creates the notes table and collection index."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -78,12 +134,12 @@ class DatabaseManager:
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
                     content TEXT,
-                    category TEXT DEFAULT '',
+                    collection TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
             """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_category ON notes(category);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_collection ON notes(collection);")
 
     def create_note_links_table(self) -> None:
         """Creates the note links junction table and indexes."""
@@ -117,13 +173,14 @@ class DatabaseManager:
             log_error(f"Database error during insert note link: {e}")
             return False
 
-    def note_count(self, category: Optional[str] = None) -> int:
-        """Returns total notes count, filtered by category if provided."""
+    def note_count(self, collection: Optional[str] = None, category: Optional[str] = None) -> int:
+        """Returns total notes count, filtered by collection if provided."""
+        col = collection if collection is not None else category
         cursor = self.conn.cursor()
-        if not category:
+        if not col:
             cursor.execute("SELECT COUNT(*) FROM notes")
         else:
-            cursor.execute("SELECT COUNT(*) FROM notes WHERE category = ?", (category,))
+            cursor.execute("SELECT COUNT(*) FROM notes WHERE collection = ?", (col,))
         result = cursor.fetchone()
         return result[0] if result else 0
 
@@ -159,26 +216,28 @@ class DatabaseManager:
         result = cursor.fetchone()
         return result[0] if result else None
 
-    def insert_note(self, note_id: str, title: str, content: str, category: str = "") -> None:
+    def insert_note(self, note_id: str, title: str, content: str, collection: str = "", category: Optional[str] = None) -> None:
         """Inserts a new note record."""
+        col = collection if category is None else category
         now = datetime.now().isoformat()
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO notes (id, title, content, category, created_at, updated_at)
+                INSERT INTO notes (id, title, content, collection, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (note_id, title, content, category, now, now))
+            """, (note_id, title, content, col, now, now))
 
-    def update_note(self, note_id: str, title: str, content: str, category: str = "") -> None:
+    def update_note(self, note_id: str, title: str, content: str, collection: str = "", category: Optional[str] = None) -> None:
         """Updates an existing note record."""
+        col = collection if category is None else category
         now = datetime.now().isoformat()
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE notes
-                SET title = ?, content = ?, category = ?, updated_at = ?
+                SET title = ?, content = ?, collection = ?, updated_at = ?
                 WHERE id = ?
-            """, (title, content, category, now, note_id))
+            """, (title, content, col, now, note_id))
 
     def delete_note(self, note_id: str) -> bool:
         """Deletes a note and cascaded links."""
@@ -192,54 +251,60 @@ class DatabaseManager:
             log_error(f"Database error during note deletion: {e}")
             return False
 
-    def delete_category(self, category_name: str) -> bool:
-        """Deletes all notes in a category and their links using subqueries."""
+    def delete_collection(self, collection_name: str) -> bool:
+        """Deletes all notes in a collection and their links using subqueries."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     DELETE FROM note_links
-                    WHERE source_note_id IN (SELECT id FROM notes WHERE category = ?)
-                       OR target_note_id IN (SELECT id FROM notes WHERE category = ?)
-                """, (category_name, category_name))
-                cursor.execute("DELETE FROM notes WHERE category = ?", (category_name,))
+                    WHERE source_note_id IN (SELECT id FROM notes WHERE collection = ?)
+                       OR target_note_id IN (SELECT id FROM notes WHERE collection = ?)
+                """, (collection_name, collection_name))
+                cursor.execute("DELETE FROM notes WHERE collection = ?", (collection_name,))
                 return True
         except sqlite3.Error as e:
-            log_error(f"Database error during category deletion: {e}")
+            log_error(f"Database error during collection deletion: {e}")
             return False
 
+    # Backward compatibility alias
+    delete_category = delete_collection
+
     def get_note(self, note_id: str) -> Optional[Tuple[str, str, str, str]]:
-        """Returns (id, title, content, category) tuple for a note ID."""
+        """Returns (id, title, content, collection) tuple for a note ID."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, title, content, category FROM notes WHERE id = ?", (note_id,))
+        cursor.execute("SELECT id, title, content, collection FROM notes WHERE id = ?", (note_id,))
         return cursor.fetchone()
 
     def get_note_model(self, note_id: str) -> Optional[Note]:
         """Returns typed Note model for a note ID."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, title, content, category, created_at, updated_at FROM notes WHERE id = ?", (note_id,))
+        cursor.execute("SELECT id, title, content, collection, created_at, updated_at FROM notes WHERE id = ?", (note_id,))
         row = cursor.fetchone()
         if row:
-            return Note(id=row[0], title=row[1], content=row[2], category=row[3], created_at=row[4], updated_at=row[5])
+            return Note(id=row[0], title=row[1], content=row[2], collection=row[3], created_at=row[4], updated_at=row[5])
         return None
 
     def get_all_notes_metadata(self) -> Tuple[List[Tuple[str, str, str]], Set[str]]:
-        """Returns metadata list [(id, title, category)] and unique category set."""
+        """Returns metadata list [(id, title, collection)] and unique collection set."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, title, category FROM notes ORDER BY updated_at DESC")
+        cursor.execute("SELECT id, title, collection FROM notes ORDER BY updated_at DESC")
         notes_metadata = cursor.fetchall()
-        all_categories = {category for _, _, category in notes_metadata if category}
-        return notes_metadata, all_categories
+        all_collections = {collection for _, _, collection in notes_metadata if collection}
+        return notes_metadata, all_collections
 
     def get_all_notes_metadata_models(self) -> List[NoteMetadata]:
         """Returns a list of typed NoteMetadata models."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, title, category FROM notes ORDER BY updated_at DESC")
-        return [NoteMetadata(id=row[0], title=row[1], category=row[2] or "") for row in cursor.fetchall()]
+        cursor.execute("SELECT id, title, collection FROM notes ORDER BY updated_at DESC")
+        return [NoteMetadata(id=row[0], title=row[1], collection=row[2] or "") for row in cursor.fetchall()]
 
-    def create_category(self, category_name: str) -> bool:
-        """Category placeholder for backward compatibility."""
+    def create_collection(self, collection_name: str) -> bool:
+        """Collection placeholder for backward compatibility."""
         return True
+
+    # Backward compatibility alias
+    create_category = create_collection
 
     def read_note_content(self, note_id: str) -> Optional[str]:
         """Returns raw content string of a note."""
@@ -248,26 +313,32 @@ class DatabaseManager:
         result = cursor.fetchone()
         return result[0] if result else None
 
-    def save_note(self, note_id: Optional[str], note_content: str, category: str = "") -> Tuple[str, str]:
-        """Direct DB helper to save or update note."""
+    def save_note(self, note_id: Optional[str], note_content: str, collection: str = "", title: Optional[str] = None, category: Optional[str] = None) -> Tuple[str, str]:
+        """Direct DB helper to save or update note without business layer coupling."""
         from uuid import uuid4
-        import note_service
+        col = collection if category is None else category
         now = datetime.now().isoformat()
-        title = note_service.sanitize_title(note_content)
+        if not title:
+            for line in (note_content or "").splitlines():
+                stripped = line.strip().lstrip("#").strip()
+                if stripped:
+                    title = stripped
+                    break
+            title = title or "Untitled Note"
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
             if note_id:
-                cursor.execute("UPDATE notes SET title = ?, content = ?, category = ?, updated_at = ? WHERE id = ?",
-                               (title, note_content, category, now, note_id))
+                cursor.execute("UPDATE notes SET title = ?, content = ?, collection = ?, updated_at = ? WHERE id = ?",
+                               (title, note_content, col, now, note_id))
                 return note_id, title
             else:
                 new_note_id = str(uuid4())
-                cursor.execute("INSERT INTO notes (id, title, content, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                               (new_note_id, title, note_content, category, now, now))
+                cursor.execute("INSERT INTO notes (id, title, content, collection, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                               (new_note_id, title, note_content, col, now, now))
                 return new_note_id, title
 
-    def rename_note(self, note_id: str, new_title: str, category: str = "") -> Tuple[bool, str]:
+    def rename_note(self, note_id: str, new_title: str, collection: str = "", category: Optional[str] = None) -> Tuple[bool, str]:
         """Direct DB helper to rename note."""
         now = datetime.now().isoformat()
         with self.get_connection() as conn:
@@ -294,7 +365,7 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.executemany("""
-                    INSERT INTO notes (id, title, content, category, created_at, updated_at)
+                    INSERT INTO notes (id, title, content, collection, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, notes_data)
         except sqlite3.Error as e:
@@ -321,7 +392,7 @@ class DatabaseManager:
                 cursor = conn.cursor()
                 if notes_data:
                     cursor.executemany("""
-                        INSERT INTO notes (id, title, content, category, created_at, updated_at)
+                        INSERT INTO notes (id, title, content, collection, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, notes_data)
                 if links_data:

@@ -4,11 +4,9 @@
 # Prevents users from launching models that exceed system RAM/VRAM capacity or disk storage.
 
 import os
+from env_config import configure_headless_environment
 
-# Prevent Vulkan loader from injecting desktop presentation layers into headless compute
-os.environ["VK_LOADER_LAYERS_DISABLE"] = "*"
-os.environ["DISABLE_LAYER_NV_OPTIMUS_1"] = "1"
-os.environ["DISABLE_LAYER_NV_PRESENT_1"] = "1"
+configure_headless_environment()
 
 import sys
 import glob
@@ -407,3 +405,79 @@ class HardwareChecker:
         except Exception as e:
             log_error(f"Error checking disk space: {e}")
             return True, "Disk alanı denetlenemedi, indirmeye izin veriliyor.", 0.0
+
+    @staticmethod
+    def get_device_performance_profile() -> str:
+        """
+        Classifies current host hardware profile:
+        - 'LOW_END': Total RAM <= 8.5 GB, available RAM <= 3.5 GB, or no hardware acceleration
+        - 'STANDARD': 12-16 GB RAM with discrete GPU or hardware acceleration
+        - 'HIGH_END': 24+ GB RAM or 12+ GB VRAM
+        """
+        mem = HardwareChecker.get_system_memory_info()
+        total_ram = mem["total_gb"]
+        avail_ram = mem["available_gb"]
+        accel = HardwareChecker.get_acceleration_info()
+        has_gpu = accel.get("gpu_offload_supported", False)
+
+        if total_ram <= 8.5 or avail_ram <= 3.5 or not has_gpu:
+            return "LOW_END"
+        if total_ram >= 24.0:
+            return "HIGH_END"
+        return "STANDARD"
+
+    @staticmethod
+    def calculate_adaptive_context_window(
+        text_content: str = "",
+        model_path: str = "",
+        model_max_ctx: int = 131072
+    ) -> int:
+        """
+        Calculates optimal, demand-driven context window:
+        1. 'Don't strain system needlessly': Allocates only what document needs (+ headroom) for short texts.
+        2. 'Low-End Safety': Limits context ceiling to 16K (or 8K) on constrained hardware.
+        3. 'Granular Scaling': Expands up to model_max_ctx in 4K blocks when document and hardware demand it.
+        Minimum context floor is 8192 tokens.
+        """
+        MIN_FLOOR = 8192
+
+        # 1. Estimate document token requirement (~3 chars per token)
+        doc_tokens = max(1, int(len(text_content) / 3.0)) if text_content else 0
+        output_budget = 4096
+        system_overhead = 2048
+        needed_tokens = doc_tokens + output_budget + system_overhead
+
+        # Round up to nearest 4096 block
+        target_doc_ctx = int(((needed_tokens + 4095) // 4096) * 4096)
+        target_doc_ctx = max(MIN_FLOOR, target_doc_ctx)
+
+        # 2. Check hardware performance profile & memory limits
+        profile = HardwareChecker.get_device_performance_profile()
+        mem = HardwareChecker.get_system_memory_info()
+        avail_ram_gb = mem["available_gb"]
+        total_ram_gb = mem["total_gb"]
+
+        # Safe ceilings by profile
+        if profile == "LOW_END":
+            # For weak / integrated / <=8GB RAM systems: never exceed 16K (or 8K if RAM < 2.5GB)
+            max_safe_ceiling = 8192 if avail_ram_gb < 2.5 else 16384
+        elif profile == "HIGH_END":
+            max_safe_ceiling = min(model_max_ctx, 262144 if total_ram_gb >= 32.0 else 131072)
+        else:  # STANDARD
+            model_size_gb = (os.path.getsize(model_path) / (1024 ** 3)) if (model_path and os.path.exists(model_path)) else 3.5
+            # For 12B+ models on 16GB RAM, keep max ceiling at 65536 to prevent VRAM overflow
+            if model_size_gb > 5.5:
+                max_safe_ceiling = min(model_max_ctx, 65536)
+            else:
+                max_safe_ceiling = min(model_max_ctx, 131072)
+
+        # Final context is the minimum between what document demands and what hardware safely allows
+        optimal_ctx = min(target_doc_ctx, max_safe_ceiling)
+        optimal_ctx = max(MIN_FLOOR, optimal_ctx)
+
+        log_debug(
+            f"Adaptive context calculated: {optimal_ctx} tokens "
+            f"(Profile: {profile}, DocDemand: {target_doc_ctx}, SafeCeiling: {max_safe_ceiling}, AvailRAM: {avail_ram_gb:.1f}GB)"
+        )
+        return optimal_ctx
+

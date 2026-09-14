@@ -11,6 +11,8 @@ from typing import Callable, Optional, List, Tuple
 from note_service import (
     preserve_single_linebreaks,
     process_markdown_wikilinks,
+    normalize_markdown_latex,
+    sanitize_math_mode_syntax,
     calculate_document_stats,
     toggle_task_in_text,
 )
@@ -78,13 +80,14 @@ class MarkdownEditorWidget(ft.Container):
             on_blur=self._handle_editor_blur,
         )
 
-        # Okuma Modu: Renderlanmış Markdown görünümü
+        # Okuma Modu: Renderlanmış Markdown görünümü (LaTeX ve WikiLink destekli)
         self.reading_markdown_view = ft.Markdown(
             value="*Henüz bir içerik yok.*",
             selectable=True,
             extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
             code_theme="atom-one-dark",
             expand=True,
+            latex_scale_factor=1.2,
             on_tap_link=self._handle_link_tap,
         )
 

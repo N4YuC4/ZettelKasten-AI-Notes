@@ -31,8 +31,13 @@ class GeminiRateLimitError(GeminiApiError):
     pass
 
 
+from typing import Optional, Callable, List, Dict, Any, Tuple
+from ai_response_parser import AiResponseParser
+from prompt_templates import build_note_extraction_prompt, build_graph_linking_prompt
+from ai_provider import BaseAiProvider
+
 # The GeminiApiClient class communicates with the Gemini API and manages note generation requests.
-class GeminiApiClient:
+class GeminiApiClient(BaseAiProvider):
     # The __init__ method initializes the API client, loads the API key, and configures the model.
     def __init__(self, api_key=None):
         if not api_key:
@@ -44,136 +49,17 @@ class GeminiApiClient:
         self.client = genai.Client(api_key=api_key) # Configure the Google GenAI client with the key
         self.model_name = 'gemma-4-31b-it'
 
-
     def _parse_notes_json(self, notes_json_str):
         """Helper method to parse and clean JSON output returned from Gemini API."""
-        if not notes_json_str or not isinstance(notes_json_str, str):
-            return []
-
-        def normalize_result(data):
-            """Normalizes parsed JSON data (list or dict) into a list of note dictionaries."""
-            if isinstance(data, list):
-                result = []
-                for item in data:
-                    if isinstance(item, dict):
-                        result.append(item)
-                return result
-            elif isinstance(data, dict):
-                # Check for standard wrapper keys
-                for key in ('notes', 'zettelkasten', 'data', 'items', 'result', 'generated_notes'):
-                    if key in data and isinstance(data[key], list):
-                        return [item for item in data[key] if isinstance(item, dict)]
-                # Check if the dict itself is a single note
-                if 'title' in data or 'content' in data:
-                    return [data]
-                # Check if it's a dict containing note dicts as values
-                dict_values = [v for v in data.values() if isinstance(v, dict)]
-                if dict_values:
-                    return dict_values
-            return []
-
-        # Clean control characters and null bytes from start/end
-        notes_json_str_cleaned = re.sub(r'^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$', '', notes_json_str)
-
-        # 1. Attempt direct parsing on cleaned string
-        try:
-            parsed = json.loads(notes_json_str_cleaned, strict=False)
-            normalized = normalize_result(parsed)
-            if normalized:
-                return normalized
-        except json.JSONDecodeError:
-            pass
-
-        # 2. Extract JSON from Markdown code blocks (```json ... ``` or ``` ... ```)
-        cleaned_str = notes_json_str_cleaned
-        code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_str)
-        for block in code_blocks:
-            block_cleaned = re.sub(r'^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$', '', block)
-            try:
-                parsed = json.loads(block_cleaned, strict=False)
-                normalized = normalize_result(parsed)
-                if normalized:
-                    return normalized
-            except json.JSONDecodeError:
-                pass
-            # Try raw_decode on code block
-            for start_char in ('[', '{'):
-                start_idx = block_cleaned.find(start_char)
-                if start_idx != -1:
-                    try:
-                        decoder = json.JSONDecoder()
-                        parsed, _ = decoder.raw_decode(block_cleaned[start_idx:])
-                        normalized = normalize_result(parsed)
-                        if normalized:
-                            return normalized
-                    except json.JSONDecodeError:
-                        pass
-
-        # 3. Try raw_decode to ignore trailing garbage on full string
-        for start_char in ('[', '{'):
-            start_idx = cleaned_str.find(start_char)
-            if start_idx != -1:
-                try:
-                    decoder = json.JSONDecoder()
-                    parsed, _ = decoder.raw_decode(cleaned_str[start_idx:])
-                    normalized = normalize_result(parsed)
-                    if normalized:
-                        return normalized
-                except json.JSONDecodeError:
-                    pass
-
-        # 4. Try fixing unescaped backslashes
-        try:
-            fixed_str = re.sub(r'\\(?![\"\\/bfnrtu])', r'\\\\', cleaned_str)
-            for start_char in ('[', '{'):
-                start_idx = fixed_str.find(start_char)
-                if start_idx != -1:
-                    try:
-                        decoder = json.JSONDecoder()
-                        parsed, _ = decoder.raw_decode(fixed_str[start_idx:])
-                        normalized = normalize_result(parsed)
-                        if normalized:
-                            return normalized
-                    except json.JSONDecodeError:
-                        pass
-            parsed = json.loads(fixed_str, strict=False)
-            normalized = normalize_result(parsed)
-            if normalized:
-                return normalized
-        except json.JSONDecodeError:
-            pass
-
-        # 5. Fallback: search for outermost array or object brackets
-        array_match = re.search(r"\[\s*\{[\s\S]*\}\s*\]", cleaned_str)
-        if array_match:
-            try:
-                fixed_array = re.sub(r'\\(?![\"\\/bfnrtu])', r'\\\\', array_match.group(0))
-                parsed = json.loads(fixed_array, strict=False)
-                normalized = normalize_result(parsed)
-                if normalized:
-                    return normalized
-            except json.JSONDecodeError:
-                pass
-
-        obj_match = re.search(r"\{\s*\"[\s\S]*\}\s*", cleaned_str)
-        if obj_match:
-            try:
-                fixed_obj = re.sub(r'\\(?![\"\\/bfnrtu])', r'\\\\', obj_match.group(0))
-                parsed = json.loads(fixed_obj, strict=False)
-                normalized = normalize_result(parsed)
-                if normalized:
-                    return normalized
-            except json.JSONDecodeError:
-                pass
-
-        return []
+        return AiResponseParser.parse_notes_json(notes_json_str)
 
     # The generate_zettelkasten_notes method generates Zettelkasten-style notes from the given text content.
-    def generate_zettelkasten_notes(self, text_content):
+    def generate_zettelkasten_notes(self, text_content, on_progress: Optional[Callable[[str], None]] = None):
         """
         Generates Zettelkasten-style notes from the given text content using the Gemini API.
         Args:
             text_content (str): The text content from which to generate notes.
+            on_progress (callable, optional): Optional callback for progress updates.
         Returns:
             list: A list of generated notes, where each note is a dictionary
                   with 'general_title', 'title', 'content' and 'connections' keys.
@@ -200,26 +86,7 @@ class GeminiApiClient:
         if len(sanitized_text) > MAX_SAFE_CHARS:
             sanitized_text = sanitized_text[:MAX_SAFE_CHARS]
 
-        prompt = f"""You are an AI assistant specialized in generating Zettelkasten-style notes.
-Extract key concepts, arguments, and insights from the text below.
-Create a set of concise, self-contained, and atomic Zettelkasten notes.
-Notes must be in the same language as the input text. Make sure markdown formatting is correct.
-
-Each note in the JSON array must have a 'general_title', 'title', 'content', and 'connections' list.
-The 'general_title' should represent the overall topic of the document.
-The 'connections' list should contain the exact titles of other related notes in this generated set. If a note has no clear relations, the connections list should be empty.
-
-Example structure:
-[
-  {{"general_title": "Zettelkasten Method", "title": "Concept of Zettelkasten", "content": "Zettelkasten is a personal knowledge management and note-taking method used in research and study. It consists of individual notes with unique IDs, interconnected by links.", "connections": []}},
-  {{"general_title": "Zettelkasten Method", "title": "Atomic Notes Principle", "content": "Each Zettelkasten note should contain only one idea or concept to ensure atomicity and reusability.", "connections": []}}
-]
-
-Text to process:
-<document_content>
-{sanitized_text}
-</document_content>
-"""
+        prompt = build_note_extraction_prompt(sanitized_text)
         try:
             response = self.client.models.generate_content(
                 model=self.model_name,
@@ -249,6 +116,66 @@ Text to process:
             raise GeminiApiError(f"Failed to parse notes from Gemini API response: {notes_json_str[:200]}")
 
         return parsed_notes
+
+    def generate_note_links(
+        self,
+        notes: List[Dict[str, Any]],
+        on_progress: Optional[Callable[[str], None]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Stage 2 of the Two-Stage Pipeline: Global Knowledge Graph Linking using Gemini API.
+        Takes the complete set of notes generated in Stage 1 with full titles and contents.
+        Queries Gemini with the numbered notes map to discover genuine conceptual connections.
+        Attaches discovered connections directly to each note's 'connections' list using AiResponseParser.
+        """
+        if not notes or len(notes) <= 1:
+            return notes
+
+        log_debug(f"Starting Stage 2: Gemini Global Knowledge Graph Linking for {len(notes)} notes...")
+        if on_progress:
+            on_progress("Notlar arası kavramsal bağlantılar çözümleniyor...")
+
+        # Prepare numbered notes export for prompt input
+        full_notes_payload = [
+            {
+                "id": idx + 1,
+                "title": n.get("title", ""),
+                "content": n.get("content", "")
+            }
+            for idx, n in enumerate(notes)
+            if n.get("title")
+        ]
+
+        # Safety ceiling if massive document note payload exceeds comfortable limits
+        notes_json_str = json.dumps(full_notes_payload, ensure_ascii=False, indent=2)
+        if len(notes_json_str) > 100_000:
+            full_notes_payload = [
+                {
+                    "id": idx + 1,
+                    "title": n.get("title", ""),
+                    "content": (n.get("content", "")[:300] + "...") if len(n.get("content", "")) > 300 else n.get("content", "")
+                }
+                for idx, n in enumerate(notes)
+                if n.get("title")
+            ]
+
+        user_prompt = build_graph_linking_prompt(full_notes_payload)
+
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=user_prompt,
+            )
+            raw_content = response.text if response and hasattr(response, 'text') and response.text else ""
+            log_debug(f"Gemini Stage 2 linking response received (len={len(raw_content)} chars): {raw_content[:400]}")
+            pairs = AiResponseParser.parse_links_json(raw_content)
+            log_debug(f"Discovered {len(pairs)} raw link pairs from Gemini linking pass.")
+
+            return AiResponseParser.attach_links_to_notes(notes, pairs)
+
+        except Exception as e:
+            log_error(f"Gemini Stage 2 global linking failed (non-fatal, continuing with notes without links): {e}\n{traceback.format_exc()}")
+            return notes
 
 # This block provides an example usage when the file is run directly (for testing purposes).
 if __name__ == '__main__':

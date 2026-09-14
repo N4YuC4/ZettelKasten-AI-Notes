@@ -20,7 +20,7 @@ A desktop application built with `Flet` for efficient knowledge management using
 
 ## How it Works
 
-The `main.py` file initializes the `Flet` application and sets up the main UI (`ZettelkastenApp`). It connects to the `SQLite` database via `database_manager.py`. When a user interacts with the application (e.g., types in the editor, clicks `save`, selects a category), `ZettelkastenApp` handles the events, updates the `UI`, and calls the appropriate methods in `database_manager.py` to perform `CRUD` (Create, Read, Update, Delete) operations on the notes in the database. The first line of a note's content is automatically used as its title.
+The `main.py` file initializes the `Flet` application and sets up the main UI (`ZettelkastenApp`). It connects to the `SQLite` database via `database_manager.py`. When a user interacts with the application (e.g., types in the editor, clicks `save`, selects a collection), `ZettelkastenApp` handles the events, updates the `UI`, and calls the appropriate methods in `database_manager.py` to perform `CRUD` (Create, Read, Update, Delete) operations on the notes in the database. The first line of a note's content is automatically used as its title.
 
 AI note generation is managed by `ai_note_generator_worker.py`. It sends the text extracted from a PDF to the `Google Gemini API` (using the `google-genai` SDK) via `gemini_api_client.py` and then processes the response to create and link the notes.
 
@@ -80,10 +80,10 @@ The mind map visualization is managed by `mind_map_widget.py`, which uses a `fle
     *   **Rename Note:** Select a note from the list, then click the "Rename Note" button to change its title.
     *   **Delete Note:** Select a note and click the "Delete Note" button to remove it.
 
-3.  **Category Management:**
-    *   **Create New Category:** Click "New Category", enter a name, and a new note will be created within that category.
-    *   **Filter by Category:** Use the category dropdown menu to view notes belonging to a specific category or "All Notes".
-    *   **Delete Category:** Select a category from the dropdown and click the "Delete Category" button. This will delete the category and all notes associated with it.
+3.  **Collection Management:**
+    *   **Create New Collection:** Click "New Collection", enter a name, and a new note will be created within that collection.
+    *   **Filter by Collection:** Use the collection dropdown menu to view notes belonging to a specific collection or "All Notes".
+    *   **Delete Collection:** Select a collection from the dropdown and click the "Delete Collection" button. This will delete the collection and all notes associated with it.
 
 4.  **Markdown Preview:**
     As you type in the left editor pane, the right pane will show a live `Markdown` preview of your note.
@@ -92,7 +92,7 @@ The mind map visualization is managed by `mind_map_widget.py`, which uses a `fle
     *   Click the "Generate AI Notes from PDF" button.
     *   Select a PDF file from your system.
     *   The application will extract the text from the PDF and send it to `Gemini AI` for note generation.
-    *   The generated notes will be automatically saved and added to your note list under the "AI Generated" category or a general title provided by the AI.
+    *   The generated notes will be automatically saved and added to your note list under the "AI Generated" collection or a general title provided by the AI.
 
 6.  **Note Linking:**
     *   **Link Notes:** Select a note from the main list. Click the "Link Note" button or right-click the note and select "Link to...". A dialog will appear allowing you to search for and select another note.
@@ -116,7 +116,7 @@ Zettelkasten-AI-Notes/
 │   │   ├── dialog_manager.py       # Modal dialog lifecycle management
 │   │   ├── editor_workspace.py     # Markdown editor workspace & action toolbar
 │   │   ├── right_panel_view.py     # Mind Map visualization & linked notes panel
-│   │   ├── sidebar_view.py         # Category navigation & notes list sidebar
+│   │   ├── sidebar_view.py         # Collection navigation & notes list sidebar
 │   │   └── splitters.py            # Draggable responsive splitter handles
 │   ├── ai_note_generator_worker.py # Background worker for AI note generation
 │   ├── app_state.py                # Centralized reactive application state

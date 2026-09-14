@@ -57,7 +57,7 @@ class MindMapWidget(ft.Container):
         self._last_nodes_fingerprint = None
         
     # The update_map method rebuilds the layout and draws the map.
-    # all_notes_metadata: A list of tuples containing (note_id, title, category)
+    # all_notes_metadata: A list of tuples containing (note_id, title, collection)
     # all_links: A list of tuples containing (source_note_id, target_note_id)
     # current_note_id: The ID of the currently selected note.
     def update_map(self, all_notes_metadata, all_links, current_note_id=None):

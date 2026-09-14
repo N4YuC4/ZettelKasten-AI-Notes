@@ -1,6 +1,6 @@
 # ui/sidebar_view.py
 #
-# Left sidebar view component: category navigation, searching, and note list management.
+# Left sidebar view component: collection navigation, searching, and note list management.
 
 import flet as ft
 from typing import Callable, Optional, List, Tuple
@@ -8,24 +8,32 @@ from typing import Callable, Optional, List, Tuple
 
 class SidebarView(ft.Container):
     """
-    Encapsulates the left sidebar UI including categories, search, notes list, and footer counters.
+    Encapsulates the left sidebar UI including collections, search, notes list, and footer counters.
     """
     def __init__(
         self,
-        on_category_changed: Callable[[str], None],
-        on_new_category_clicked: Callable[[], None],
-        on_delete_category_clicked: Callable[[], None],
-        on_search_changed: Callable[[str], None],
-        on_note_clicked: Callable[[str, str, str], None],
-        on_rename_note_clicked: Callable[[str, str], None],
-        on_delete_note_clicked: Callable[[str, str], None],
-        on_settings_clicked: Callable[[], None],
+        on_collection_changed: Optional[Callable[[str], None]] = None,
+        on_new_collection_clicked: Optional[Callable[[], None]] = None,
+        on_delete_collection_clicked: Optional[Callable[[], None]] = None,
+        on_search_changed: Callable[[str], None] = None,
+        on_note_clicked: Callable[[str, str, str], None] = None,
+        on_rename_note_clicked: Callable[[str, str], None] = None,
+        on_delete_note_clicked: Callable[[str, str], None] = None,
+        on_settings_clicked: Callable[[], None] = None,
         on_collapse_clicked: Optional[Callable[[], None]] = None,
+        # Backward compatibility kwargs
+        on_category_changed: Optional[Callable[[str], None]] = None,
+        on_new_category_clicked: Optional[Callable[[], None]] = None,
+        on_delete_category_clicked: Optional[Callable[[], None]] = None,
     ):
         super().__init__()
-        self.on_category_changed = on_category_changed
-        self.on_new_category_clicked = on_new_category_clicked
-        self.on_delete_category_clicked = on_delete_category_clicked
+        self.on_collection_changed = on_collection_changed or on_category_changed
+        self.on_new_collection_clicked = on_new_collection_clicked or on_new_category_clicked
+        self.on_delete_collection_clicked = on_delete_collection_clicked or on_delete_category_clicked
+        self.on_category_changed = self.on_collection_changed
+        self.on_new_category_clicked = self.on_new_collection_clicked
+        self.on_delete_category_clicked = self.on_delete_collection_clicked
+
         self.on_search_changed = on_search_changed
         self.on_note_clicked = on_note_clicked
         self.on_rename_note_clicked = on_rename_note_clicked
@@ -44,13 +52,14 @@ class SidebarView(ft.Container):
         self._build_layout()
 
     def _init_controls(self):
-        self.category_dropdown = ft.Dropdown(
-            label="Category",
+        self.collection_dropdown = ft.Dropdown(
+            label="Collection",
             options=[ft.dropdown.Option(key="", text="All Notes")],
             value="",
             expand=True,
-            on_select=lambda e: self.on_category_changed(self.category_dropdown.value or "")
+            on_select=lambda e: self.on_collection_changed(self.collection_dropdown.value or "") if self.on_collection_changed else None
         )
+        self.category_dropdown = self.collection_dropdown
 
         self.search_textfield = ft.TextField(
             hint_text="Search notes...",
@@ -88,7 +97,7 @@ class SidebarView(ft.Container):
                     icon=ft.Icons.FOLDER_OPEN,
                     icon_color=ft.Colors.ON_SURFACE_VARIANT,
                     icon_size=18,
-                    tooltip="Kategoriler",
+                    tooltip="Koleksiyonlar",
                     on_click=lambda e: self.set_collapsed(False)
                 ),
                 ft.IconButton(
@@ -135,16 +144,16 @@ class SidebarView(ft.Container):
                 ft.Row(header_controls, alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Divider(height=1, thickness=1),
                 ft.Row([
-                    self.category_dropdown,
+                    self.collection_dropdown,
                     ft.IconButton(
                         ft.Icons.ADD_BOX,
-                        on_click=lambda e: self.on_new_category_clicked(),
-                        tooltip="New Category"
+                        on_click=lambda e: self.on_new_collection_clicked() if self.on_new_collection_clicked else None,
+                        tooltip="New Collection"
                     ),
                     ft.IconButton(
                         ft.Icons.DELETE_FOREVER,
-                        on_click=lambda e: self.on_delete_category_clicked(),
-                        tooltip="Delete Category"
+                        on_click=lambda e: self.on_delete_collection_clicked() if self.on_delete_collection_clicked else None,
+                        tooltip="Delete Collection"
                     )
                 ], spacing=5),
                 self.search_textfield,
@@ -187,40 +196,53 @@ class SidebarView(ft.Container):
         """Toggles between expanded and narrow rail."""
         self.set_collapsed(not self.is_collapsed)
 
-    def update_categories(self, categories: List[str], selected_category: str = ""):
-        """Updates category dropdown options and selected value."""
-        self.category_dropdown.options.clear()
-        self.category_dropdown.options.append(ft.dropdown.Option(key="", text="All Notes"))
+    def update_collections(
+        self,
+        collections: Optional[List[str]] = None,
+        selected_collection: str = "",
+        categories: Optional[List[str]] = None,
+        selected_category: Optional[str] = None
+    ):
+        """Updates collection dropdown options and selected value."""
+        cols = collections if collections is not None else (categories or [])
+        sel = selected_collection if selected_category is None else selected_category
+        self.collection_dropdown.options.clear()
+        self.collection_dropdown.options.append(ft.dropdown.Option(key="", text="All Notes"))
         added_keys = {""}
-        for cat in categories:
-            cat_clean = cat.strip()
-            if cat_clean and cat_clean not in added_keys:
-                self.category_dropdown.options.append(ft.dropdown.Option(key=cat_clean, text=cat_clean))
-                added_keys.add(cat_clean)
+        for col in cols:
+            col_clean = col.strip()
+            if col_clean and col_clean not in added_keys:
+                self.collection_dropdown.options.append(ft.dropdown.Option(key=col_clean, text=col_clean))
+                added_keys.add(col_clean)
         
-        # Ensure newly created empty category is selectable before notes exist
-        selected_clean = (selected_category or "").strip()
+        # Ensure newly created empty collection is selectable before notes exist
+        selected_clean = (sel or "").strip()
         if selected_clean and selected_clean != "All Notes" and selected_clean not in added_keys:
-            self.category_dropdown.options.append(ft.dropdown.Option(key=selected_clean, text=selected_clean))
+            self.collection_dropdown.options.append(ft.dropdown.Option(key=selected_clean, text=selected_clean))
             added_keys.add(selected_clean)
 
-        self.category_dropdown.value = selected_clean if selected_clean != "All Notes" else ""
+        self.collection_dropdown.value = selected_clean if selected_clean != "All Notes" else ""
         try:
-            self.category_dropdown.update()
+            self.collection_dropdown.update()
         except Exception:
             pass
+
+    # Backward compatibility alias
+    update_categories = update_collections
 
     def render_notes(
         self,
         notes: List[Tuple[str, str, str]],
         current_note_id: Optional[str],
-        category_name: str,
-        total_count: int
+        collection_name: str = "",
+        total_count: int = 0,
+        category_name: Optional[str] = None
     ):
         """Renders list of note cards."""
+        col_name = collection_name if category_name is None else category_name
         self.notes_listview.controls.clear()
 
-        for note_id, display_title, category_path in notes:
+        for note_id, display_title, collection_path in notes:
             is_selected = (note_id == current_note_id)
             bg_color = ft.Colors.PRIMARY_CONTAINER if is_selected else ft.Colors.TRANSPARENT
             text_color = ft.Colors.ON_PRIMARY_CONTAINER if is_selected else ft.Colors.ON_SURFACE
@@ -247,12 +269,12 @@ class SidebarView(ft.Container):
                 padding=ft.Padding.all(8),
                 border_radius=8,
                 bgcolor=bg_color,
-                on_click=lambda e, nid=note_id, title=display_title, cat=category_path: self.on_note_clicked(nid, title, cat),
+                on_click=lambda e, nid=note_id, title=display_title, col=collection_path: self.on_note_clicked(nid, title, col),
                 on_hover=lambda e, bg=bg_color: setattr(e.control, 'bgcolor', ft.Colors.SURFACE_CONTAINER_HIGH if e.data == "true" else bg) or e.control.update()
             )
             self.notes_listview.controls.append(item)
 
-        label_prefix = category_name if category_name and category_name != "All Notes" else "All Notes"
+        label_prefix = col_name if col_name and col_name != "All Notes" else "All Notes"
         self.note_count_label.value = f"{label_prefix} count: {total_count}"
 
         try:

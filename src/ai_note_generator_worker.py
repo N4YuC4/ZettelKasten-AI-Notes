@@ -5,11 +5,9 @@
 # Executed in a background thread to prevent UI freezing.
 
 import os
+from env_config import configure_headless_environment
 
-# Prevent Vulkan loader from injecting desktop presentation layers into headless compute
-os.environ["VK_LOADER_LAYERS_DISABLE"] = "*"
-os.environ["DISABLE_LAYER_NV_OPTIMUS_1"] = "1"
-os.environ["DISABLE_LAYER_NV_PRESENT_1"] = "1"
+configure_headless_environment()
 
 import re
 import difflib
@@ -20,6 +18,7 @@ from uuid import uuid4
 from datetime import datetime
 from typing import Optional, Callable, List, Dict, Any
 
+from ai_provider import BaseAiProvider, create_ai_provider
 from gemini_api_client import GeminiApiClient, GeminiApiError, GeminiAuthError, GeminiRateLimitError
 from local_gguf_client import LocalGgufClient, LocalLlmError, LocalModelNotFoundError, LocalModelOOMError
 import local_models_catalog
@@ -99,7 +98,8 @@ def _isolated_local_inference_entry(
         client = LocalGgufClient(
             model_path=model_path,
             n_gpu_layers=n_gpu_layers,
-            n_threads=n_threads
+            n_threads=n_threads,
+            text_content=text_content
         )
         queue.put(("progress", "Model hazır. Notlar üretiliyor..."))
 
@@ -164,6 +164,21 @@ class AiNoteGeneratorWorker:
         """Returns True if the worker process has been cancelled."""
         return self._cancel_event.is_set()
 
+    def create_provider(
+        self,
+        provider_type: str,
+        db_manager: Optional[Any] = None,
+        model_path: Optional[str] = None,
+        n_gpu_layers: int = -1
+    ) -> BaseAiProvider:
+        """
+        Instantiates the appropriate BaseAiProvider implementation.
+        """
+        if provider_type == "local":
+            return LocalGgufClient(model_path, n_gpu_layers=n_gpu_layers)
+        else:
+            return GeminiApiClient()
+
     def run(self) -> None:
         """Main execution method for the background worker thread."""
         db_manager_worker = None
@@ -192,7 +207,7 @@ class AiNoteGeneratorWorker:
                 return
 
             # 2. Initialize thread-local DatabaseManager
-            db_manager_worker = database_manager.DatabaseManager(init_tables=False)
+            db_manager_worker = database_manager.DatabaseManager(init_tables=True)
 
             # 3. Determine AI Provider and generate notes
             ai_provider = (db_manager_worker.get_setting("AI_PROVIDER") or "gemini").lower()
@@ -221,7 +236,7 @@ class AiNoteGeneratorWorker:
                 if "PYTEST_CURRENT_TEST" in os.environ:
                     HardwareChecker.configure_vulkan_environment(enable_gpu=gpu_accel)
                     self.report_progress("Model belleğe yükleniyor...")
-                    local_client = LocalGgufClient(model_path, n_gpu_layers=n_gpu_layers)
+                    local_client = self.create_provider("local", db_manager_worker, model_path=model_path, n_gpu_layers=n_gpu_layers)
 
                     if self._cancel_event.is_set():
                         log_debug("DEBUG: AiNoteGeneratorWorker cancelled after loading model.")
@@ -234,10 +249,12 @@ class AiNoteGeneratorWorker:
                     )
                     if generated_notes and len(generated_notes) > 1:
                         self.report_progress("Graf bağlantıları çözümleniyor...")
-                        generated_notes = local_client.generate_note_links(
+                        linked_notes = local_client.generate_note_links(
                             generated_notes,
                             on_progress=self.report_progress
                         )
+                        if isinstance(linked_notes, list):
+                            generated_notes = linked_notes
                 else:
                     # In live production GUI, run in an isolated spawn process to guarantee
                     # zero driver deadlocks with Wayland/Flutter/EGL, live UI responsiveness,
@@ -290,8 +307,19 @@ class AiNoteGeneratorWorker:
                         raise LocalLlmError("Lokal model not çıkarımını tamamlayamadan kapandı.")
             else:
                 self.report_progress("Gemini ile notlar üretiliyor...")
-                gemini_client = GeminiApiClient()
-                generated_notes = gemini_client.generate_zettelkasten_notes(text_content)
+                gemini_client = self.create_provider("gemini", db_manager_worker)
+                generated_notes = gemini_client.generate_zettelkasten_notes(text_content, on_progress=self.report_progress)
+                if generated_notes and len(generated_notes) > 1:
+                    if self._cancel_event.is_set():
+                        log_debug("DEBUG: AiNoteGeneratorWorker cancelled before Gemini linking.")
+                        return
+                    self.report_progress("Graf bağlantıları çözümleniyor...")
+                    linked_notes = gemini_client.generate_note_links(
+                        generated_notes,
+                        on_progress=self.report_progress
+                    )
+                    if isinstance(linked_notes, list):
+                        generated_notes = linked_notes
 
             # Check for cancellation after API call
             if self._cancel_event.is_set():
@@ -351,12 +379,12 @@ class AiNoteGeneratorWorker:
                 final_id = note_data['_final_id']
                 final_title = note_data.get('_final_title', note_data.get('title', 'Untitled Note'))
                 content = note_data.get('content', '')
-                category = note_data.get('general_title', 'AI Generated')
+                collection = note_data.get('general_title', 'AI Generated')
 
                 full_content = f"# {final_title}\n\n{content}"
 
                 notes_to_insert.append(
-                    (final_id, final_title, full_content, category, now, now)
+                    (final_id, final_title, full_content, collection, now, now)
                 )
 
                 connections = note_data.get('connections', [])
@@ -390,7 +418,9 @@ class AiNoteGeneratorWorker:
             # 7. Safe callback dispatch
             if self.on_finished:
                 try:
+                    log_debug("AiNoteGeneratorWorker: Dispatching on_finished callback to UI.")
                     self.on_finished(generated_notes)
+                    log_debug("AiNoteGeneratorWorker: on_finished callback executed successfully.")
                 except Exception as cb_err:
                     log_error(f"Error in on_finished callback: {cb_err}\n{traceback.format_exc()}")
 

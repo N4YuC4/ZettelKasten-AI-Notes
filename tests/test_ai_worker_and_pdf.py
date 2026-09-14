@@ -413,5 +413,32 @@ def test_worker_cancel_before_run(temp_db):
     assert len(errors) == 0
 
 
+def test_worker_gemini_calls_generate_note_links(temp_db, monkeypatch):
+    mock_gemini_client = MagicMock()
+    mock_gemini_client.generate_zettelkasten_notes.return_value = [
+        {"title": "Note Alpha", "content": "Content Alpha", "connections": [], "general_title": "Topic"},
+        {"title": "Note Beta", "content": "Content Beta", "connections": [], "general_title": "Topic"}
+    ]
+    mock_gemini_client.generate_note_links.return_value = [
+        {"title": "Note Alpha", "content": "Content Alpha", "connections": ["Note Beta"], "general_title": "Topic"},
+        {"title": "Note Beta", "content": "Content Beta", "connections": ["Note Alpha"], "general_title": "Topic"}
+    ]
+    monkeypatch.setattr("ai_note_generator_worker.GeminiApiClient", lambda: mock_gemini_client)
+
+    progress_messages = []
+    worker = AiNoteGeneratorWorker(
+        "sample text",
+        on_finished=None,
+        on_error=None,
+        on_progress=lambda m: progress_messages.append(m)
+    )
+    worker.run()
+
+    mock_gemini_client.generate_zettelkasten_notes.assert_called_once()
+    mock_gemini_client.generate_note_links.assert_called_once()
+    assert any("Graf bağlantıları çözümleniyor" in m for m in progress_messages)
+
+
+
 
 

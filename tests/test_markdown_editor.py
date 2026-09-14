@@ -13,6 +13,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from markdown_editor_widget import (
     MarkdownEditorWidget,
     process_markdown_wikilinks,
+    normalize_markdown_latex,
+    sanitize_math_mode_syntax,
     preserve_single_linebreaks,
     calculate_document_stats,
     toggle_task_in_text,
@@ -45,6 +47,87 @@ def test_process_markdown_wikilinks():
 
     # Empty string
     assert process_markdown_wikilinks("") == ""
+
+
+def test_normalize_markdown_latex():
+    # Empty string
+    assert normalize_markdown_latex("") == ""
+
+    # Formula inside parentheses: closing $ followed by ')' must have space inserted
+    text = r"Neoklasik ($\frac{\partial F}{\partial K} > 0$ ve $\frac{\partial^2 F}{\partial K^2} < 0$)."
+    normalized = normalize_markdown_latex(text)
+    assert r"$\frac{\partial^2 F}{\partial K^2} < 0$ )" in normalized
+
+    # Enclosing parentheses and brackets are absorbed into math delimiters: ($formula$) -> $(formula)$
+    text_paren = r"Satisfaction scale ($\beta=0.75, R^2=0.56$), indicating that"
+    norm_paren = normalize_markdown_latex(text_paren)
+    assert r"$(\beta=0.75, R^2=0.56),$" in norm_paren
+
+    # Punctuation with brackets, quotes:
+    text_punc = r'[$y = 2$]; "$z = 3$".'
+    norm_punc = normalize_markdown_latex(text_punc)
+    assert r"$[y = 2];$" in norm_punc
+    assert r'$z = 3$ "' in norm_punc
+
+    # Trailing sentence punctuation (. , ; :) is absorbed into the formula
+    # to prevent Flutter from wrapping the punctuation onto a new line by itself
+    text_sentence = r"Recall is $TP / (TP + FN)$. Specificity is $TN / (TN + FP)$, and precision."
+    norm_sentence = normalize_markdown_latex(text_sentence)
+    assert r"$TP / (TP + FN).$" in norm_sentence
+    assert r"$TN / (TN + FP),$" in norm_sentence
+
+    # Inline math followed by text or space without punctuation
+    text_ok = r"$a = b$ and $c = d$"
+    norm_ok = normalize_markdown_latex(text_ok)
+    assert norm_ok == text_ok
+
+    # Code block must be protected
+    code_text = "```python\n($x = 1$)\n```\nOutside: ($y = 2$)."
+    norm_code = normalize_markdown_latex(code_text)
+    assert "```python\n($x = 1$)\n```" in norm_code
+    assert "$(y = 2).$" in norm_code
+
+    # Inline code must be protected
+    inline_text = "Use `($foo$)` variable with ($bar = 1$)."
+    norm_inline = normalize_markdown_latex(inline_text)
+    assert "`($foo$)`" in norm_inline
+    assert "$(bar = 1).$" in norm_inline
+
+    # Math operators inside \\text{} must be sanitized to valid math mode
+    math_text = r"$H = \frac{\text{∑}(x_i - \bar{x})}{\text{Hello}}$"
+    norm_math = normalize_markdown_latex(math_text)
+    assert r"\text{∑}" not in norm_math
+    assert r"\sum" in norm_math
+    assert r"\text{Hello}" in norm_math
+
+
+def test_sanitize_math_mode_syntax():
+    assert sanitize_math_mode_syntax(r"\text{∑}_{i=1}^N") == r" \sum _{i=1}^N"
+    assert sanitize_math_mode_syntax(r"\text{\sum}") == r" \sum "
+    assert sanitize_math_mode_syntax(r"\text{∏}") == r" \prod "
+    assert sanitize_math_mode_syntax(r"\text{√}") == r" \sqrt "
+    assert sanitize_math_mode_syntax(r"\text{Standard text}") == r"\text{Standard text}"
+
+
+def test_preserve_single_linebreaks_with_math_blocks():
+    # Single-line $$ must not toggle in_code indefinitely
+    text = "Line 1\n$$ E = mc^2 $$\nLine 2\nLine 3"
+    res = preserve_single_linebreaks(text)
+    lines = res.split("\n")
+    assert lines[0] == "Line 1  "
+    assert lines[1] == "$$ E = mc^2 $$  "
+    assert lines[2] == "Line 2  "
+    assert lines[3] == "Line 3  "
+
+    # Multiline $$ block
+    text_multi = "Intro\n$$\nE = mc^2\n$$\nOutro"
+    res_multi = preserve_single_linebreaks(text_multi)
+    lines_multi = res_multi.split("\n")
+    assert lines_multi[0] == "Intro  "
+    assert lines_multi[1] == "$$"
+    assert lines_multi[2] == "E = mc^2"
+    assert lines_multi[3] == "$$"
+    assert lines_multi[4] == "Outro  "
 
 
 def test_calculate_document_stats():

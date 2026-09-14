@@ -22,27 +22,32 @@ class DialogManager:
 
     def _init_dialogs(self):
         # 1. Simple Action Confirm Dialogs
+        self.delete_note_msg = ft.Text("")
         self.delete_note_dialog = ft.AlertDialog(
             title=ft.Text("Delete Note"),
-            content=ft.Text(""),
+            content=self.delete_note_msg,
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
         )
-        self.delete_cat_dialog = ft.AlertDialog(
-            title=ft.Text("Kategoriyi Sil"),
-            content=ft.Text("Bu kategoriyi ve içerdiği tüm notları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz."),
+        self.delete_col_dialog = ft.AlertDialog(
+            title=ft.Text("Koleksiyonu Sil"),
+            content=ft.Text("Bu koleksiyonu ve içerdiği tüm notları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz."),
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
         )
+        self.delete_cat_dialog = self.delete_col_dialog
+        self.unlink_msg = ft.Text("")
         self.unlink_dialog = ft.AlertDialog(
             title=ft.Text("Unlink Note"),
-            content=ft.Text(""),
+            content=self.unlink_msg,
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
         )
+        self.error_title = ft.Text("Error")
+        self.error_msg = ft.Text("")
         self.error_dialog = ft.AlertDialog(
-            title=ft.Text("Error"),
-            content=ft.Text(""),
+            title=self.error_title,
+            content=self.error_msg,
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
         )
@@ -52,21 +57,24 @@ class DialogManager:
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
         )
+        self.create_linked_msg = ft.Text("")
         self.create_linked_dialog = ft.AlertDialog(
             title=ft.Text("Yeni Not Bağlantısı"),
-            content=ft.Text(""),
+            content=self.create_linked_msg,
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
         )
 
         # 2. Input Dialogs
-        self.new_category_field = ft.TextField(label="Category Name", border_radius=8)
-        self.new_category_dialog = ft.AlertDialog(
-            title=ft.Text("New Category"),
-            content=self.new_category_field,
+        self.new_collection_field = ft.TextField(label="Collection Name", border_radius=8)
+        self.new_collection_dialog = ft.AlertDialog(
+            title=ft.Text("New Collection"),
+            content=self.new_collection_field,
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
         )
+        self.new_category_field = self.new_collection_field
+        self.new_category_dialog = self.new_collection_dialog
 
         self.rename_note_field = ft.TextField(label="New Note Title", border_radius=8)
         self.rename_dialog = ft.AlertDialog(
@@ -93,16 +101,20 @@ class DialogManager:
             actions_alignment=ft.MainAxisAlignment.END
         )
 
-        # 4. Progress / Loading Dialog
+        # 4. Progress / Loading Dialog (Persistent controls to prevent duplicate DialogRoute stacking)
+        self.loading_title = ft.Text("Yapay Zeka ile Not Üretiliyor", weight=ft.FontWeight.BOLD)
+        self.loading_ring = ft.ProgressRing(width=28, height=28, stroke_width=3)
         self.loading_msg = ft.Text("Metin ayıklanıyor... Lütfen bekleyiniz.", size=13)
+        self.loading_cancel_btn = ft.TextButton("İptal", visible=False)
         self.loading_dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text("Yapay Zeka ile Not Üretiliyor", weight=ft.FontWeight.BOLD),
+            title=self.loading_title,
             content=ft.Row([
-                ft.ProgressRing(width=28, height=28, stroke_width=3),
+                self.loading_ring,
                 self.loading_msg
             ], spacing=15, alignment=ft.MainAxisAlignment.CENTER),
-            actions=[]
+            actions=[self.loading_cancel_btn],
+            actions_alignment=ft.MainAxisAlignment.END
         )
 
         # 5. Settings Dialog
@@ -133,12 +145,12 @@ class DialogManager:
         # Register all dialogs in page overlay with on_dismiss sync
         dialogs = [
             self.delete_note_dialog,
-            self.delete_cat_dialog,
+            self.delete_col_dialog,
             self.unlink_dialog,
             self.error_dialog,
             self.unsaved_dialog,
             self.create_linked_dialog,
-            self.new_category_dialog,
+            self.new_collection_dialog,
             self.rename_dialog,
             self.link_note_dialog,
             self.loading_dialog,
@@ -153,59 +165,85 @@ class DialogManager:
         """Keeps dialog open state strictly synchronized when closed via backdrop or ESC."""
         dlg.open = False
 
-    def close(self, dlg: ft.AlertDialog) -> None:
-        """Closes any given modal dialog safely."""
-        dlg.open = False
+    def _safe_open(self, dlg: ft.AlertDialog) -> None:
+        """Opens a modal dialog safely, pushing state updates to both dialog and page."""
+        dlg.open = True
+        try:
+            dlg.update()
+        except Exception:
+            pass
         try:
             self.page.update()
         except Exception:
             pass
 
+    def _safe_close(self, dlg: ft.AlertDialog) -> None:
+        """Closes a modal dialog safely, pushing state updates to both dialog and page."""
+        dlg.open = False
+        try:
+            dlg.update()
+        except Exception:
+            pass
+        # Pop from active dialog stack if present in page._dialogs
+        try:
+            if hasattr(self.page, "_dialogs") and hasattr(self.page._dialogs, "controls"):
+                if dlg in self.page._dialogs.controls:
+                    self.page._remove_dialog(dlg)
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def close(self, dlg: ft.AlertDialog) -> None:
+        """Closes any given modal dialog safely."""
+        self._safe_close(dlg)
+
     def show_error(self, title: str, message: str) -> None:
         """Displays an error alert dialog."""
-        self.error_dialog.title = ft.Text(title)
-        self.error_dialog.content = ft.Text(message)
+        self.error_title.value = title
+        self.error_msg.value = message
         self.error_dialog.actions = [
             ft.TextButton("OK", on_click=lambda e: self.close(self.error_dialog))
         ]
-        self.error_dialog.open = True
-        self.page.update()
+        self._safe_open(self.error_dialog)
 
     def show_delete_note_confirm(self, note_title: str, on_confirm: Callable) -> None:
         """Shows note deletion confirmation dialog."""
-        self.delete_note_dialog.content = ft.Text(
+        self.delete_note_msg.value = (
             f"Are you sure you want to delete '{note_title}'?\nThis action cannot be undone."
         )
         self.delete_note_dialog.actions = [
             ft.TextButton("Yes", on_click=lambda e: (self.close(self.delete_note_dialog), on_confirm())),
             ft.TextButton("No", on_click=lambda e: self.close(self.delete_note_dialog))
         ]
-        self.delete_note_dialog.open = True
-        self.page.update()
+        self._safe_open(self.delete_note_dialog)
 
-    def show_delete_category_confirm(self, category_name: str, on_confirm: Callable) -> None:
-        """Shows category deletion confirmation dialog."""
-        self.delete_cat_dialog.content = ft.Text(
-            f"Bu kategoriyi ('{category_name}') ve içerdiği tüm notları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz."
+    def show_delete_collection_confirm(self, collection_name: str, on_confirm: Callable) -> None:
+        """Shows collection deletion confirmation dialog."""
+        self.delete_col_dialog.content = ft.Text(
+            f"Bu koleksiyonu ('{collection_name}') ve içerdiği tüm notları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz."
         )
-        self.delete_cat_dialog.actions = [
-            ft.TextButton("İptal", on_click=lambda e: self.close(self.delete_cat_dialog)),
-            ft.TextButton("Sil", on_click=lambda e: (self.close(self.delete_cat_dialog), on_confirm()))
+        self.delete_col_dialog.actions = [
+            ft.TextButton("İptal", on_click=lambda e: self.close(self.delete_col_dialog)),
+            ft.TextButton("Sil", on_click=lambda e: (self.close(self.delete_col_dialog), on_confirm()))
         ]
-        self.delete_cat_dialog.open = True
-        self.page.update()
+        self._safe_open(self.delete_col_dialog)
+
+    # Backward compatibility alias
+    show_delete_category_confirm = show_delete_collection_confirm
 
     def show_unlink_confirm(self, target_title: str, on_confirm: Callable) -> None:
         """Shows unlinking confirmation dialog."""
-        self.unlink_dialog.content = ft.Text(
+        self.unlink_msg.value = (
             f"Are you sure you want to unlink '{target_title}' from the current note?"
         )
         self.unlink_dialog.actions = [
             ft.TextButton("Yes", on_click=lambda e: (self.close(self.unlink_dialog), on_confirm())),
             ft.TextButton("No", on_click=lambda e: self.close(self.unlink_dialog))
         ]
-        self.unlink_dialog.open = True
-        self.page.update()
+        self._safe_open(self.unlink_dialog)
 
     def show_unsaved_changes_prompt(self, on_save: Callable, on_discard: Callable) -> None:
         """Shows prompt when navigating away with unsaved changes."""
@@ -214,31 +252,31 @@ class DialogManager:
             ft.TextButton("No", on_click=lambda e: (self.close(self.unsaved_dialog), on_discard())),
             ft.TextButton("Cancel", on_click=lambda e: self.close(self.unsaved_dialog))
         ]
-        self.unsaved_dialog.open = True
-        self.page.update()
+        self._safe_open(self.unsaved_dialog)
 
     def show_create_linked_note_prompt(self, target_title: str, on_create: Callable) -> None:
         """Shows prompt when clicking a WikiLink to a non-existent note."""
-        self.create_linked_dialog.content = ft.Text(
+        self.create_linked_msg.value = (
             f"'{target_title}' başlıklı bir not bulunamadı.\nYeni bir not olarak oluşturmak ister misiniz?"
         )
         self.create_linked_dialog.actions = [
             ft.TextButton("Oluştur", on_click=lambda e: (self.close(self.create_linked_dialog), on_create())),
             ft.TextButton("İptal", on_click=lambda e: self.close(self.create_linked_dialog))
         ]
-        self.create_linked_dialog.open = True
-        self.page.update()
+        self._safe_open(self.create_linked_dialog)
 
-    def show_new_category_dialog(self, on_submit: Callable[[str], None]) -> None:
-        """Opens dialog to create a new category."""
-        self.new_category_field.value = ""
-        self.new_category_field.on_submit = lambda e: on_submit(self.new_category_field.value)
-        self.new_category_dialog.actions = [
-            ft.TextButton("Create", on_click=lambda e: on_submit(self.new_category_field.value)),
-            ft.TextButton("Cancel", on_click=lambda e: self.close(self.new_category_dialog))
+    def show_new_collection_dialog(self, on_submit: Callable[[str], None]) -> None:
+        """Opens dialog to create a new collection."""
+        self.new_collection_field.value = ""
+        self.new_collection_field.on_submit = lambda e: on_submit(self.new_collection_field.value)
+        self.new_collection_dialog.actions = [
+            ft.TextButton("Create", on_click=lambda e: on_submit(self.new_collection_field.value)),
+            ft.TextButton("Cancel", on_click=lambda e: self.close(self.new_collection_dialog))
         ]
-        self.new_category_dialog.open = True
-        self.page.update()
+        self._safe_open(self.new_collection_dialog)
+
+    # Backward compatibility alias
+    show_new_category_dialog = show_new_collection_dialog
 
     def show_rename_dialog(self, current_title: str, on_submit: Callable[[str], None]) -> None:
         """Opens dialog to rename a note."""
@@ -248,8 +286,7 @@ class DialogManager:
             ft.TextButton("Rename", on_click=lambda e: on_submit(self.rename_note_field.value)),
             ft.TextButton("Cancel", on_click=lambda e: self.close(self.rename_dialog))
         ]
-        self.rename_dialog.open = True
-        self.page.update()
+        self._safe_open(self.rename_dialog)
 
     def show_link_picker(
         self,
@@ -282,8 +319,7 @@ class DialogManager:
         self.link_note_dialog.actions = [
             ft.TextButton("Cancel", on_click=lambda e: self.close(self.link_note_dialog))
         ]
-        self.link_note_dialog.open = True
-        self.page.update()
+        self._safe_open(self.link_note_dialog)
         update_link_list("")
 
     def show_loading(
@@ -293,23 +329,15 @@ class DialogManager:
         on_cancel: Optional[Callable[[], None]] = None
     ) -> None:
         """Shows loading progress dialog with custom text and optional cancellation."""
-        self.loading_dialog.title = ft.Text(title, weight=ft.FontWeight.BOLD)
+        self.loading_title.value = title
         self.loading_msg.value = message
-        self.loading_dialog.content = ft.Row([
-            ft.ProgressRing(width=28, height=28, stroke_width=3),
-            self.loading_msg
-        ], spacing=15, alignment=ft.MainAxisAlignment.CENTER)
         if on_cancel:
-            self.loading_dialog.actions = [
-                ft.TextButton("İptal", on_click=lambda e: on_cancel())
-            ]
+            self.loading_cancel_btn.visible = True
+            self.loading_cancel_btn.on_click = lambda e: on_cancel()
         else:
-            self.loading_dialog.actions = []
-        self.loading_dialog.open = True
-        try:
-            self.page.update()
-        except Exception:
-            pass
+            self.loading_cancel_btn.visible = False
+            self.loading_cancel_btn.on_click = None
+        self._safe_open(self.loading_dialog)
 
     def update_loading_message(self, message: str) -> None:
         """Updates text of an already open loading dialog."""
@@ -318,17 +346,16 @@ class DialogManager:
             self.loading_msg.update()
         except Exception:
             try:
-                self.page.update()
+                self.loading_dialog.update()
             except Exception:
-                pass
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
 
     def hide_loading(self) -> None:
         """Hides the loading dialog."""
-        self.loading_dialog.open = False
-        try:
-            self.page.update()
-        except Exception:
-            pass
+        self._safe_close(self.loading_dialog)
 
     def show_settings_dialog(
         self,
@@ -452,11 +479,7 @@ class DialogManager:
             )),
             ft.TextButton("İptal", on_click=lambda e: self.close(self.settings_dialog))
         ]
-        self.settings_dialog.open = True
-        try:
-            self.page.update()
-        except Exception:
-            pass
+        self._safe_open(self.settings_dialog)
 
     def show_model_manager_dialog(
         self,
@@ -732,8 +755,7 @@ class DialogManager:
             ft.TextButton("Kapat", on_click=close_model_manager)
         ]
 
-        self.model_manager_dialog.open = True
-        self.page.update()
+        self._safe_open(self.model_manager_dialog)
         refresh_models_list()
 
         # Launch background poller on Flet page async event loop

@@ -87,9 +87,12 @@ def test_save_note_update_with_explicit_id(temp_db):
     assert updated_title == "Updated Title"
     assert note_manager.get_note_content(temp_db, note_id) == updated_content
 
-def test_create_category():
-    assert note_manager.create_category("Science") is True
-    assert note_manager.create_category("   ") is False
+def test_create_collection():
+    assert note_manager.create_collection("Science") is True
+    assert note_manager.create_collection("   ") is False
+    assert note_manager.create_collection("") is False
+    # Backward compatibility
+    assert note_manager.create_category("Art") is True
     assert note_manager.create_category("") is False
 
 def test_load_all_notes_metadata(temp_db):

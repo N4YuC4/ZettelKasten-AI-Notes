@@ -8,10 +8,11 @@ import note_service
 from note_service import NoteService, generate_unique_id, sanitize_title as get_sanitized_title
 
 
-def save_note(db_manager, note_id: Optional[str], note_content: str, category_path: str = "") -> Tuple[str, str]:
+def save_note(db_manager, note_id: Optional[str], note_content: str, collection_path: str = "", category_path: Optional[str] = None) -> Tuple[str, str]:
     """Saves or updates a note in the database via NoteService."""
     service = NoteService(db_manager)
-    return service.save_note(note_id, note_content, category_path)
+    col = collection_path if category_path is None else category_path
+    return service.save_note(note_id, note_content, col)
 
 
 def delete_note(db_manager, note_id: str) -> bool:
@@ -20,14 +21,15 @@ def delete_note(db_manager, note_id: str) -> bool:
     return service.delete_note(note_id)
 
 
-def rename_note(db_manager, note_id: str, new_title: str, category_path: Optional[str] = None) -> Tuple[bool, str]:
+def rename_note(db_manager, note_id: str, new_title: str, collection_path: Optional[str] = None, category_path: Optional[str] = None) -> Tuple[bool, str]:
     """Renames a note via NoteService."""
     service = NoteService(db_manager)
-    return service.rename_note(note_id, new_title, category_path)
+    col = collection_path if category_path is None else category_path
+    return service.rename_note(note_id, new_title, col)
 
 
 def load_all_notes_metadata(db_manager) -> Tuple[List[Tuple[str, str, str]], List[str]]:
-    """Loads metadata and categories via NoteService."""
+    """Loads metadata and collections via NoteService."""
     service = NoteService(db_manager)
     return service.load_all_notes_metadata()
 
@@ -38,6 +40,10 @@ def get_note_content(db_manager, note_id: str) -> Optional[str]:
     return service.get_note_content(note_id)
 
 
-def create_category(category_name: str) -> bool:
-    """Validates category name format."""
-    return bool(category_name and category_name.strip())
+def create_collection(collection_name: str) -> bool:
+    """Validates collection name format."""
+    return bool(collection_name and collection_name.strip())
+
+
+# Backward compatibility alias
+create_category = create_collection

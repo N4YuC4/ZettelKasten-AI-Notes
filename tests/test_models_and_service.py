@@ -25,23 +25,38 @@ def temp_db(tmp_path):
 
 
 def test_models_creation_and_properties():
-    # Note and NoteMetadata
+    # Note and NoteMetadata with collection
     note = Note(
         id="test-1",
         title="Test Title",
         content="# Test Title\nBody",
-        category="General"
+        collection="General"
     )
     assert note.id == "test-1"
+    assert note.collection == "General"
+    assert note.category == "General"
     assert note.metadata.id == "test-1"
     assert note.metadata.title == "Test Title"
+    assert note.metadata.collection == "General"
     assert note.metadata.category == "General"
     assert note.metadata.to_tuple() == ("test-1", "Test Title", "General")
+
+    # Backward compatibility: creating with category keyword argument
+    legacy_note = Note(
+        id="test-legacy",
+        title="Legacy",
+        content="Content",
+        category="LegacyCat"
+    )
+    assert legacy_note.collection == "LegacyCat"
+    assert legacy_note.category == "LegacyCat"
+    assert legacy_note.metadata.collection == "LegacyCat"
 
     db_tuple = note.to_db_tuple()
     assert len(db_tuple) == 6
     assert db_tuple[0] == "test-1"
     assert db_tuple[1] == "Test Title"
+    assert db_tuple[3] == "General"
 
     # NoteLink
     link = NoteLink(source_note_id="n1", target_note_id="n2")
@@ -122,8 +137,9 @@ def test_note_service_crud_and_links(temp_db):
     assert len(meta) == 2
     assert "Science" in cats
 
-    # Delete category
-    assert service.delete_category("Science") is True
+    # Delete collection (and test backward compatibility alias)
+    assert service.delete_collection("Science") is True
+    assert service.delete_collection("") is False
     assert service.delete_category("") is False
     meta_after, _ = service.load_all_notes_metadata()
     assert len(meta_after) == 0
@@ -215,7 +231,7 @@ def test_rename_note_with_none_or_leading_blank_lines(temp_db):
     # 1. Test None content in DB
     cursor = temp_db.conn.cursor()
     cursor.execute(
-        "INSERT INTO notes (id, title, content, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notes (id, title, content, collection, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         ("none-id", "None Title", None, "General", "2026-08-31", "2026-08-31")
     )
     temp_db.conn.commit()
@@ -233,5 +249,16 @@ def test_rename_note_with_none_or_leading_blank_lines(temp_db):
     lines2 = content2.splitlines()
     assert lines2[3] == "# New Clean Header"
     assert "Original Header" not in content2
+
+
+def test_process_markdown_wikilinks_normalizes_latex():
+    raw = "Solow modeli ($Y=F(K,L)$ ve $\\frac{\\partial F}{\\partial K} > 0$). Bağlantı: [[Büyüme Modeli]]."
+    processed = note_service.process_markdown_wikilinks(raw)
+    assert "[🔗 Büyüme Modeli](zettel://note/B%C3%BCy%C3%BCme%20Modeli)" in processed
+    # Formula followed by closing parenthesis should have space inserted before ')'
+    assert r"$\frac{\partial F}{\partial K} > 0$ )" in processed
+    # Formula followed by space should remain clean
+    assert "$Y=F(K,L)$" in processed
+
 
 

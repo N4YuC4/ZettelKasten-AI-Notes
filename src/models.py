@@ -12,10 +12,24 @@ class NoteMetadata:
     """Lightweight metadata representation of a note for lists and lookups."""
     id: str
     title: str
-    category: str = ""
+    collection: str = ""
+
+    def __init__(self, id: str, title: str, collection: str = "", category: Optional[str] = None):
+        self.id = id
+        self.title = title
+        self.collection = category if category is not None else collection
+
+    @property
+    def category(self) -> str:
+        """Backward compatibility alias for collection."""
+        return self.collection
+
+    @category.setter
+    def category(self, val: str) -> None:
+        self.collection = val
 
     def to_tuple(self) -> tuple[str, str, str]:
-        return (self.id, self.title, self.category)
+        return (self.id, self.title, self.collection)
 
 
 @dataclass
@@ -24,16 +38,43 @@ class Note:
     id: str
     title: str
     content: str
-    category: str = ""
+    collection: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
+    def __init__(
+        self,
+        id: str,
+        title: str,
+        content: str,
+        collection: str = "",
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+        category: Optional[str] = None,
+    ):
+        self.id = id
+        self.title = title
+        self.content = content
+        self.collection = category if category is not None else collection
+        now_str = datetime.now().isoformat()
+        self.created_at = created_at if created_at is not None else now_str
+        self.updated_at = updated_at if updated_at is not None else now_str
+
+    @property
+    def category(self) -> str:
+        """Backward compatibility alias for collection."""
+        return self.collection
+
+    @category.setter
+    def category(self, val: str) -> None:
+        self.collection = val
+
     @property
     def metadata(self) -> NoteMetadata:
-        return NoteMetadata(id=self.id, title=self.title, category=self.category)
+        return NoteMetadata(id=self.id, title=self.title, collection=self.collection)
 
     def to_db_tuple(self) -> tuple[str, str, str, str, str, str]:
-        return (self.id, self.title, self.content, self.category, self.created_at, self.updated_at)
+        return (self.id, self.title, self.content, self.collection, self.created_at, self.updated_at)
 
 
 @dataclass

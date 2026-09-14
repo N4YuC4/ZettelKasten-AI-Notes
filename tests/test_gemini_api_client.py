@@ -139,3 +139,52 @@ def test_generate_zettelkasten_notes_sanitizes_delimiters(monkeypatch):
     assert called_prompt.count("</document_content>") == 1
 
 
+def test_generate_note_links_empty_or_single(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy_key")
+    client = GeminiApiClient()
+    assert client.generate_note_links([]) == []
+    single = [{"title": "Only One", "content": "Desc", "connections": []}]
+    assert client.generate_note_links(single) == single
+
+
+def test_generate_note_links_attaches_bidirectional_connections(monkeypatch):
+    import json
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy_key")
+    client = GeminiApiClient()
+    client.client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = json.dumps({"links": [{"source": 1, "target": 2}]})
+    client.client.models.generate_content.return_value = mock_resp
+
+    notes = [
+        {"title": "Note Alpha", "content": "Content A", "connections": []},
+        {"title": "Note Beta", "content": "Content B", "connections": []}
+    ]
+    linked = client.generate_note_links(notes)
+    assert len(linked) == 2
+    assert "Note Beta" in linked[0]["connections"]
+    assert "Note Alpha" in linked[1]["connections"]
+
+    called_prompt = client.client.models.generate_content.call_args[1]["contents"]
+    assert "<all_notes>" in called_prompt
+    assert "Note Alpha" in called_prompt
+    assert "Note Beta" in called_prompt
+
+
+def test_generate_note_links_api_error_fallback(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy_key")
+    client = GeminiApiClient()
+    client.client = MagicMock()
+    client.client.models.generate_content.side_effect = Exception("API Link Error")
+
+    notes = [
+        {"title": "Note Alpha", "content": "Content A", "connections": []},
+        {"title": "Note Beta", "content": "Content B", "connections": []}
+    ]
+    res = client.generate_note_links(notes)
+    # Non-fatal: returns original notes without links
+    assert len(res) == 2
+    assert res[0]["connections"] == []
+
+
+

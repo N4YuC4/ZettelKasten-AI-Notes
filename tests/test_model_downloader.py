@@ -14,18 +14,18 @@ import local_models_catalog as catalog
 
 
 def test_get_model_path():
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     path = ModelDownloader.get_model_path(model, "/tmp/models")
     assert path == os.path.join("/tmp/models", model.filename)
 
 
 def test_is_model_downloaded_false_for_missing():
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     assert ModelDownloader.is_model_downloaded(model, "/tmp/non_existent_folder_xyz") is False
 
 
 def test_is_model_downloaded_true_for_existing(tmp_path):
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     model_file = tmp_path / model.filename
     # write > 10MB dummy data
     with open(model_file, "wb") as f:
@@ -35,7 +35,7 @@ def test_is_model_downloaded_true_for_existing(tmp_path):
 
 
 def test_delete_model(tmp_path):
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     model_file = tmp_path / model.filename
     part_file = tmp_path / (model.filename + ".part")
     model_file.write_text("dummy")
@@ -51,7 +51,7 @@ def test_delete_model(tmp_path):
 
 
 def test_download_mocked_success(tmp_path):
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     progress_updates = []
     finished_path = []
 
@@ -75,7 +75,7 @@ def test_download_mocked_success(tmp_path):
 
 
 def test_download_mocked_retry_recovery(tmp_path):
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     progress_updates = []
     finished_path = []
 
@@ -120,7 +120,7 @@ def test_format_eta():
 
 
 def test_status_registry_and_listeners():
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     received_events = []
 
     def my_listener(status):
@@ -136,7 +136,7 @@ def test_status_registry_and_listeners():
 
 
 def test_download_insufficient_disk_space(tmp_path):
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     error_called = []
 
     with patch.object(HardwareChecker, "check_disk_space", return_value=(False, "Yetersiz Disk Alanı!", 0.5)):
@@ -153,7 +153,7 @@ def test_download_insufficient_disk_space(tmp_path):
 
 
 def test_download_retry_counter_resets_on_successful_data_transfer(tmp_path):
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     observed_retry_counts = []
     finished_path = []
 

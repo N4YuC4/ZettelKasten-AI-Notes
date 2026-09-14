@@ -61,7 +61,7 @@ def test_pragmas_and_indexes(temp_db):
     # Verify secondary indexes
     cursor.execute("SELECT name FROM sqlite_master WHERE type='index'")
     indexes = {row[0] for row in cursor.fetchall()}
-    assert "idx_notes_category" in indexes
+    assert "idx_notes_collection" in indexes
     assert "idx_links_source" in indexes
     assert "idx_links_target" in indexes
 
@@ -160,4 +160,79 @@ def test_delete_category_subquery_scalability(temp_db):
     assert len(temp_db.get_all_note_links()) == 0
 
 
+def test_database_manager_recovers_when_db_file_deleted_from_disk(temp_db):
+    temp_db.insert_note("rec-1", "Note 1", "Content", "Cat")
+    assert temp_db.note_count() == 1
+    assert os.path.exists(temp_db.db_path)
 
+    # Delete database file from disk while connection is open
+    os.remove(temp_db.db_path)
+    assert not os.path.exists(temp_db.db_path)
+
+    # Next call should detect file deletion, close stale connection, reconnect and ensure schema
+    assert temp_db.note_count() == 0
+    assert os.path.exists(temp_db.db_path)
+
+    # Can insert and query immediately without 'no such table' error
+    temp_db.insert_note("rec-2", "Note 2", "Content 2", "Cat")
+    assert temp_db.note_count() == 1
+    assert temp_db.get_note("rec-2") is not None
+
+
+def test_sqlite_category_to_collection_migration(tmp_path):
+    import sqlite3
+    legacy_db_file = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(legacy_db_file))
+    cur = conn.cursor()
+    # Create legacy schema with category column and idx_notes_category index
+    cur.execute("""
+        CREATE TABLE notes (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            content TEXT,
+            category TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    cur.execute("CREATE INDEX idx_notes_category ON notes(category);")
+    cur.execute("""
+        CREATE TABLE note_links (
+            source_note_id TEXT NOT NULL,
+            target_note_id TEXT NOT NULL,
+            PRIMARY KEY (source_note_id, target_note_id)
+        )
+    """)
+    cur.execute("""
+        INSERT INTO notes (id, title, content, category, created_at, updated_at)
+        VALUES ('legacy-1', 'Legacy Title', 'Legacy Content', 'OldCategory', '2026-01-01', '2026-01-01')
+    """)
+    conn.commit()
+    conn.close()
+
+    # Now open with DatabaseManager
+    database_manager.DATABASE_FILE = str(legacy_db_file)
+    db = DatabaseManager()
+    try:
+        cur = db.conn.cursor()
+        cur.execute("PRAGMA table_info(notes);")
+        columns = [row[1] for row in cur.fetchall()]
+        assert "collection" in columns
+        assert "category" not in columns
+
+        cur.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        indexes = {row[0] for row in cur.fetchall()}
+        assert "idx_notes_collection" in indexes
+        assert "idx_notes_category" not in indexes
+
+        # Verify data preserved
+        note = db.get_note_model("legacy-1")
+        assert note is not None
+        assert note.collection == "OldCategory"
+        assert note.category == "OldCategory"
+
+        # Verify collection methods work
+        assert db.delete_collection("OldCategory") is True
+        assert db.get_note("legacy-1") is None
+    finally:
+        db.close_connection()

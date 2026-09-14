@@ -265,8 +265,8 @@ def test_generate_zettelkasten_notes_calls_on_progress():
     assert any("notlar" in m.lower() for m in progress_messages)
 
 
-def test_default_context_window_is_32k():
-    assert LocalGgufClient.DEFAULT_CONTEXT_WINDOW == 32768
+def test_default_context_window_is_128k():
+    assert LocalGgufClient.DEFAULT_CONTEXT_WINDOW == 131072
 
 
 def test_execute_inference_with_chained_context():
@@ -303,7 +303,7 @@ def test_execute_inference_with_chained_context():
     messages = call_args["messages"]
     user_prompt = messages[1]["content"]
 
-    assert "=== ÖNCEKİ BÖLÜMLERDEN AKTARILAN BAĞLAM ===" in user_prompt
+    assert "=== PREVIOUS SECTION CONTEXT ===" in user_prompt
     assert "Turing Test" in user_prompt
     assert "AI Ethics" in user_prompt
     assert "DEDICATED NEW NOTES (NO DUPLICATES)" in user_prompt
@@ -362,7 +362,7 @@ def test_generate_zettelkasten_notes_chained_multi_chunk(tmp_path):
             # Check that the second call received the first call's notes in its chained context!
             assert len(call_prompts) == 2
             assert "Sensory Perception" in call_prompts[1]
-            assert "=== ÖNCEKİ BÖLÜMLERDEN AKTARILAN BAĞLAM ===" in call_prompts[1]
+            assert "=== PREVIOUS SECTION CONTEXT ===" in call_prompts[1]
 
 
 def test_parse_links_json_formats():
@@ -444,6 +444,333 @@ def test_generate_note_links_single_note_noop():
     res = client.generate_note_links(single_note)
     assert len(res) == 1
     mock_llm.create_chat_completion.assert_not_called()
+
+
+def test_clean_connections_filters_structural_and_citations_across_domains():
+    raw_connections = [
+        # Academic citations and propositions
+        "[1]",
+        "[38]",
+        "[Smith et al., 2021]",
+        "Figure 3",
+        "Proposition 4.1",
+        "Theorem 2",
+        "Table 1",
+        "Equation (4)",
+        "Footnote 5",
+        # Legal articles and clauses
+        "Madde 5",
+        "Article 12",
+        "Fıkra 2",
+        "Clause 3.1",
+        "Bent (a)",
+        "Ek-1",
+        # Books and structure
+        "Chapter 4",
+        "Bölüm 2",
+        "Page 45",
+        "Sayfa 12",
+        # Transcripts and media
+        "00:14:22",
+        "Speaker 1",
+        # Self title
+        "Target Concept Title",
+        # Genuine conceptual note titles (MUST BE PRESERVED)
+        "Hyperbolic Embedding Space",
+        "Sözleşmeden Dönme Hakkı",
+        "Asynchronous Event Loop",
+        "Hyperbolic Embedding Space",  # duplicate, must be deduplicated
+    ]
+
+    cleaned = LocalGgufClient._clean_connections(raw_connections, current_title="Target Concept Title")
+    assert cleaned == [
+        "Hyperbolic Embedding Space",
+        "Sözleşmeden Dönme Hakkı",
+        "Asynchronous Event Loop"
+    ]
+
+
+def test_execute_inference_prompt_contains_universal_rule():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "general_title": "Legal & Tech Analysis",
+                    "notes": [{
+                        "title": "Autonomous Liability",
+                        "content": "Liability principles in autonomous systems.",
+                        "connections": ["[12]", "Madde 5", "Strict Liability Doctrine"]
+                    }]
+                })
+            }
+        }]
+    }
+    client.llm = mock_llm
+
+    notes = client._execute_inference("Sample text discussing legal liability in AI systems.")
+    assert len(notes) == 1
+    # Check that structural connections were automatically filtered out
+    assert notes[0]["connections"] == ["Strict Liability Doctrine"]
+
+    # Verify prompt contains universal instruction across all document types
+    call_args = mock_llm.create_chat_completion.call_args[1]
+    prompt_text = call_args["messages"][1]["content"]
+    assert "Never use structural labels, numbers, or citations as titles" in prompt_text
+    assert "Article 5" in prompt_text
+    assert "[12]" in prompt_text
+    assert "Figure 3" in prompt_text
+
+
+def test_granular_16k_fallback_ladder_on_memory_error(tmp_path):
+    dummy_model = tmp_path / "model.gguf"
+    dummy_model.write_bytes(b"dummy gguf content")
+
+    LocalGgufClient.unload_cached_model()
+
+    # Simulate: 131072 fails with OOM, but 114688 succeeds!
+    mock_successful_llm = MagicMock()
+
+    call_contexts = []
+    def mock_llama_init(*args, **kwargs):
+        ctx = kwargs.get("n_ctx")
+        call_contexts.append(ctx)
+        if ctx == 131072:
+            raise MemoryError("failed to create context: out of memory")
+        return mock_successful_llm
+
+    with patch("hardware_checker.HardwareChecker.check_file_compatibility", return_value=(True, "OK", "OK")):
+        with patch("llama_cpp.Llama", side_effect=mock_llama_init):
+            client = LocalGgufClient(str(dummy_model), n_ctx=131072)
+            assert client.n_ctx == 114688
+            assert 131072 in call_contexts
+            assert 114688 in call_contexts
+
+    LocalGgufClient.unload_cached_model()
+
+
+def test_parse_notes_json_with_numeric_ids_and_top_level_links():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    sample_response = json.dumps({
+        "general_title": "Bilinç Teorisi",
+        "notes": [
+            {
+                "id": 1,
+                "title": "Çökme Mekanizması",
+                "content": "Kuantum durumunun deterministik çöküşü.",
+                "connections": []
+            },
+            {
+                "id": 2,
+                "title": "Aday Üretim Süreci",
+                "content": "Olası durumların türetilmesi.",
+                "connections": []
+            }
+        ],
+        "links": [
+            {"source": 1, "target": 2}
+        ]
+    })
+    res = client._parse_notes_json(sample_response)
+    assert len(res) == 2
+    assert res[0]["title"] == "Çökme Mekanizması"
+    assert res[0]["connections"] == ["Aday Üretim Süreci"]
+    assert res[1]["title"] == "Aday Üretim Süreci"
+    assert res[1]["connections"] == ["Çökme Mekanizması"]
+
+
+def test_parse_notes_json_with_in_note_numeric_connections():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    sample_response = json.dumps({
+        "general_title": "Felsefe",
+        "notes": [
+            {
+                "id": 1,
+                "title": "Bilinç Durumu",
+                "content": "Açıklama 1",
+                "connections": [2]
+            },
+            {
+                "id": 2,
+                "title": "Gözlemci Etkisi",
+                "content": "Açıklama 2",
+                "connections": ["1"]
+            }
+        ]
+    })
+    res = client._parse_notes_json(sample_response)
+    assert len(res) == 2
+    assert res[0]["connections"] == ["Gözlemci Etkisi"]
+    assert res[1]["connections"] == ["Bilinç Durumu"]
+
+
+def test_generate_note_links_with_integer_ids():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "links": [
+                        {"source": 1, "target": 2},
+                        {"source": 2, "target": 3}
+                    ]
+                })
+            }
+        }]
+    }
+    client.llm = mock_llm
+
+    notes = [
+        {"title": "Kavram A", "content": "Açıklama A", "connections": []},
+        {"title": "Kavram B", "content": "Açıklama B", "connections": []},
+        {"title": "Kavram C", "content": "Açıklama C", "connections": []}
+    ]
+
+    linked_notes = client.generate_note_links(notes)
+    assert len(linked_notes) == 3
+    assert "Kavram B" in linked_notes[0]["connections"]
+    assert "Kavram A" in linked_notes[1]["connections"]
+    assert "Kavram C" in linked_notes[1]["connections"]
+    assert "Kavram B" in linked_notes[2]["connections"]
+
+
+def test_generate_note_links_with_string_digits():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "links": [
+                        {"source": "1", "target": "2"}
+                    ]
+                })
+            }
+        }]
+    }
+    client.llm = mock_llm
+
+    notes = [
+        {"title": "Alpha", "content": "Desc Alpha", "connections": []},
+        {"title": "Beta", "content": "Desc Beta", "connections": []}
+    ]
+
+    linked_notes = client.generate_note_links(notes)
+    assert "Beta" in linked_notes[0]["connections"]
+    assert "Alpha" in linked_notes[1]["connections"]
+
+
+def test_generate_note_links_with_parenthetical_stripped_fallback():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "links": [
+                        {"source": "Collapse Mechanism", "target": "Candidate Generation Process"}
+                    ]
+                })
+            }
+        }]
+    }
+    client.llm = mock_llm
+
+    notes = [
+        {"title": "Collapse Mechanism (Boltzmann-Softmax)", "content": "Desc 1", "connections": []},
+        {"title": "Candidate Generation Process ($G$)", "content": "Desc 2", "connections": []}
+    ]
+
+    linked_notes = client.generate_note_links(notes)
+    assert "Candidate Generation Process ($G$)" in linked_notes[0]["connections"]
+    assert "Collapse Mechanism (Boltzmann-Softmax)" in linked_notes[1]["connections"]
+
+
+def test_execute_inference_prompt_contains_id_and_few_shot():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "general_title": "Test Topic",
+                    "notes": [{"id": 1, "title": "Test Note", "content": "Desc", "connections": []}],
+                    "links": []
+                })
+            }
+        }]
+    }
+    client.llm = mock_llm
+
+    client._execute_inference("Sample document text")
+
+    call_args = mock_llm.create_chat_completion.call_args[1]
+    sys_prompt = call_args["messages"][0]["content"]
+    prompt_text = call_args["messages"][1]["content"]
+    assert "STRICT LANGUAGE MATCHING:" in prompt_text
+    assert "NEVER MIX LANGUAGES" in prompt_text
+    assert "ATOMIC ZETTELKASTEN NOTES:" in prompt_text
+    assert "CONCEPTUAL CONNECTIONS" not in prompt_text
+    assert "JSON FORMAT:" in prompt_text
+    assert "Always generate all titles, contents, and collections in the exact same language" in sys_prompt
+    assert "Document Topic" in prompt_text
+    assert "Concept Name" in prompt_text
+
+
+def test_execute_inference_language_agnostic_prompt():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "general_title": "Hukuk",
+                    "notes": [{"id": 1, "title": "Sözleşme Feshi", "content": "Açıklama", "connections": []}],
+                    "links": []
+                })
+            }
+        }]
+    }
+    client.llm = mock_llm
+
+    tr_text = "Borçlar Kanunu uyarınca sözleşmeden dönme hakkı borçlunun temerrüdü halinde alacaklıya tanınan seçimlik bir haktır."
+    client._execute_inference(tr_text)
+
+    call_args = mock_llm.create_chat_completion.call_args[1]
+    sys_prompt = call_args["messages"][0]["content"]
+    user_prompt = call_args["messages"][1]["content"]
+
+    # System instruction enforces universal fidelity to whatever language is input
+    assert "Always generate all titles, contents, and collections in the exact same language as the source text." in sys_prompt
+    assert "STRICT LANGUAGE MATCHING:" in user_prompt
+    assert "NEVER MIX LANGUAGES:" in user_prompt
+
+
+def test_generate_note_links_universal_language_agnostic_prompt():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": json.dumps({"links": [{"source": 1, "target": 2}]})}}]
+    }
+    client.llm = mock_llm
+
+    # Notes in any language (English, Turkish, etc.) use the same universal ID linking prompt
+    notes = [
+        {"title": "Çökme Mekanizması", "content": "Kuantum durumunun deterministik indirgenmesi.", "connections": []},
+        {"title": "Gözlemci Etkisi", "content": "Gözlemci ile gözlenen sistem arasındaki etkileşim.", "connections": []}
+    ]
+    linked_notes = client.generate_note_links(notes)
+    call_prompt = mock_llm.create_chat_completion.call_args[1]["messages"][1]["content"]
+
+    assert "Below are all Zettelkasten notes extracted from the document" in call_prompt
+    assert "RULES:" in call_prompt
+    assert '"source": 1, "target": 2' in call_prompt
+    assert "Gözlemci Etkisi" in linked_notes[0]["connections"]
+    assert "Çökme Mekanizması" in linked_notes[1]["connections"]
+
+
 
 
 

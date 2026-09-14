@@ -27,7 +27,7 @@ def test_get_cpu_info():
 
 
 def test_check_model_compatibility_ok():
-    model = catalog.get_model_by_id("qwen-3.5-4b")
+    model = catalog.get_model_by_id("gemma-4-e2b")
     # Mock system with 32 GB RAM, 28 GB available
     with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 32.0, "available_gb": 28.0}):
         is_safe, msg, status = HardwareChecker.check_model_compatibility(model)
@@ -36,7 +36,7 @@ def test_check_model_compatibility_ok():
 
 
 def test_check_model_compatibility_warning():
-    model = catalog.get_model_by_id("qwen-3.5-4b") # min 4 GB, rec 8 GB
+    model = catalog.get_model_by_id("gemma-4-e2b") # min 4 GB, rec 8 GB
     # Mock system with 16 GB total, 5 GB available
     with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 16.0, "available_gb": 5.0}):
         is_safe, msg, status = HardwareChecker.check_model_compatibility(model)
@@ -45,7 +45,7 @@ def test_check_model_compatibility_warning():
 
 
 def test_check_model_compatibility_low_free_memory_allows_with_warning():
-    model = catalog.get_model_by_id("qwen-3.5-4b") # min 4 GB
+    model = catalog.get_model_by_id("gemma-4-e2b") # min 4 GB
     # System has 16 GB total, but only 2 GB free currently -> Should NOT block, should warn
     with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 16.0, "available_gb": 2.0}):
         is_safe, msg, status = HardwareChecker.check_model_compatibility(model)
@@ -55,7 +55,7 @@ def test_check_model_compatibility_low_free_memory_allows_with_warning():
 
 
 def test_check_model_compatibility_blocked_total_ram():
-    model = catalog.get_model_by_id("qwen-3.6-35b-moe") # min 24 GB
+    model = catalog.get_model_by_id("gemma-4-26b-moe") # min 16 GB
     # Mock system with only 8 GB total RAM
     with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 8.0, "available_gb": 6.0}):
         is_safe, msg, status = HardwareChecker.check_model_compatibility(model)
@@ -121,6 +121,47 @@ def test_get_acceleration_info_cuda_backend():
         info = HardwareChecker.get_acceleration_info(force_refresh=True)
         assert info["gpu_offload_supported"] is True
         assert "CUDA" in info["active_backend"]
+
+
+def test_device_performance_profile_detection():
+    # Low-end machine (<= 8.5 GB RAM)
+    with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 8.0, "available_gb": 4.0, "used_gb": 4.0, "percent_used": 50.0}):
+        with patch.object(HardwareChecker, "get_acceleration_info", return_value={"gpu_offload_supported": False}):
+            assert HardwareChecker.get_device_performance_profile() == "LOW_END"
+
+    # High-end machine (>= 24 GB RAM)
+    with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 32.0, "available_gb": 25.0, "used_gb": 7.0, "percent_used": 20.0}):
+        with patch.object(HardwareChecker, "get_acceleration_info", return_value={"gpu_offload_supported": True}):
+            assert HardwareChecker.get_device_performance_profile() == "HIGH_END"
+
+    # Standard machine (16 GB RAM with GPU)
+    with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 16.0, "available_gb": 10.0, "used_gb": 6.0, "percent_used": 40.0}):
+        with patch.object(HardwareChecker, "get_acceleration_info", return_value={"gpu_offload_supported": True}):
+            assert HardwareChecker.get_device_performance_profile() == "STANDARD"
+
+
+def test_calculate_adaptive_context_window():
+    # 1. Short document: only 200 words (~50 tokens). Should allocate minimum floor of 8192
+    short_text = "Short note text about an idea. " * 50
+    ctx_short = HardwareChecker.calculate_adaptive_context_window(short_text)
+    assert ctx_short == 8192
+
+    # 2. Medium/Long document on Standard profile: ~30,000 tokens demand
+    long_text = "Dense academic analysis of neural networks and latent representations. " * 1500
+    with patch.object(HardwareChecker, "get_device_performance_profile", return_value="STANDARD"):
+        with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 16.0, "available_gb": 10.0}):
+            ctx_long = HardwareChecker.calculate_adaptive_context_window(long_text, model_max_ctx=131072)
+            assert ctx_long >= 32768
+            assert ctx_long <= 131072
+            # Must be multiple of 4096
+            assert ctx_long % 4096 == 0
+
+    # 3. Long document on Low-End profile: Should be capped at safe ceiling (16384 or 8192)
+    with patch.object(HardwareChecker, "get_device_performance_profile", return_value="LOW_END"):
+        with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 8.0, "available_gb": 3.0}):
+            ctx_low_end = HardwareChecker.calculate_adaptive_context_window(long_text, model_max_ctx=131072)
+            assert ctx_low_end == 16384
+
 
 
 
