@@ -283,7 +283,7 @@ class AppController:
         for nid, title, cat in all_notes:
             if title.strip().lower() == target_title.strip().lower():
                 self.guard_unsaved_changes(self.open_note_internal, nid, title, cat)
-                self.show_snack_bar(f"'{title}' notuna geçildi.")
+                self.show_snack_bar(f"Switched to note '{title}'.")
                 return
 
         source_note_id = self.state.current_note_id
@@ -294,7 +294,7 @@ class AppController:
                 self.note_service.create_link(source_note_id, self.state.current_note_id)
                 self.refresh_linked_notes()
                 self.refresh_mind_map()
-            self.show_snack_bar(f"'{target_title}' notu oluşturuldu ve bağlandı.")
+            self.show_snack_bar(f"Note '{target_title}' created and linked.")
 
         self.dialog_manager.show_create_linked_note_prompt(target_title, on_create=create_linked_note)
 
@@ -445,7 +445,7 @@ class AppController:
                 self.open_note_internal(all_notes[0][0], all_notes[0][1], all_notes[0][2])
             else:
                 self.new_note_internal()
-            self.show_snack_bar(f"Koleksiyon '{col_to_delete}' ve içerdiği tüm notlar silindi.")
+            self.show_snack_bar(f"Collection '{col_to_delete}' and all its notes were deleted.")
         else:
             self.show_snack_bar("Failed to delete collection.", color=ft.Colors.ERROR)
 
@@ -558,9 +558,9 @@ class AppController:
         self.db_manager.set_setting("ACTIVE_LOCAL_MODEL", active_model_id)
         self.db_manager.set_setting("GPU_ACCELERATION", "True" if gpu_acceleration else "False")
 
-        prov_title = "Google Gemini" if ai_provider == "gemini" else "Lokal GGUF"
-        gpu_status = "Açık" if gpu_acceleration else "Kapalı"
-        self.show_snack_bar(f"Ayarlar kaydedildi. (Sağlayıcı: {prov_title}, GPU: {gpu_status})")
+        prov_title = "Google Gemini" if ai_provider == "gemini" else "Local GGUF"
+        gpu_status = "Enabled" if gpu_acceleration else "Disabled"
+        self.show_snack_bar(f"Settings saved. (Provider: {prov_title}, GPU: {gpu_status})")
 
     def handle_open_model_manager(self):
         """Opens modal model manager dialog."""
@@ -571,9 +571,9 @@ class AppController:
             active_model_id=active_model_id,
             on_select_model=lambda mid: (
                 self.db_manager.set_setting("ACTIVE_LOCAL_MODEL", mid),
-                self.show_snack_bar(f"Aktif model seçildi: {local_models_catalog.get_model_by_id(mid).display_name if local_models_catalog.get_model_by_id(mid) else mid}")
+                self.show_snack_bar(f"Active model selected: {local_models_catalog.get_model_by_id(mid).display_name if local_models_catalog.get_model_by_id(mid) else mid}")
             ),
-            on_model_deleted=lambda mid: self.show_snack_bar("Model dosyası silindi.")
+            on_model_deleted=lambda mid: self.show_snack_bar("Model file deleted.")
         )
 
     def handle_open_settings(self):
@@ -591,7 +591,7 @@ class AppController:
             )
         except Exception as ex:
             log_error(f"Error opening settings dialog: {ex}")
-            self.show_snack_bar(f"Ayarlar açılırken hata oluştu: {ex}", color=ft.Colors.ERROR)
+            self.show_snack_bar(f"Error opening settings: {ex}", color=ft.Colors.ERROR)
 
     def cancel_worker(self):
         """Cancels active background AI worker and frees memory."""
@@ -604,14 +604,15 @@ class AppController:
         except Exception as e:
             log_error(f"Error unloading cached model on cancel: {e}")
         self.dialog_manager.hide_loading()
-        self.show_snack_bar("Not çıkarma işlemi iptal edildi.", color=ft.Colors.TERTIARY)
+        time.sleep(0.35)
+        self.show_snack_bar("Note extraction cancelled.", color=ft.Colors.TERTIARY)
 
     def handle_ai_finished(self, generated_notes):
         """Invoked when AI note generation successfully completes."""
         self.active_worker = None
         log_debug(f"handle_ai_finished invoked with {len(generated_notes) if generated_notes else 0} notes.")
         self.dialog_manager.hide_loading()
-        time.sleep(0.05)
+        time.sleep(0.35)
         if generated_notes:
             try:
                 self.state.set_collection_filter("")
@@ -619,45 +620,47 @@ class AppController:
                     self.right_panel.mind_map_widget.invalidate_cache()
                 self.refresh_collections("")
                 self.refresh_notes("")
-                self.show_snack_bar(f"{len(generated_notes)} not başarıyla üretildi ve kaydedildi!")
+                self.show_snack_bar(f"{len(generated_notes)} notes successfully generated and saved!")
                 log_debug("handle_ai_finished UI refresh completed successfully.")
             except Exception as e:
                 log_error(f"Error during UI refresh in handle_ai_finished: {e}\n{traceback.format_exc()}")
         else:
-            self.show_snack_bar("Yapay zeka tarafından not üretilemedi.", color=ft.Colors.TERTIARY)
+            self.show_snack_bar("No notes could be generated by AI.", color=ft.Colors.TERTIARY)
 
     def handle_ai_error(self, err_msg: str):
         """Invoked when AI note generation fails."""
         self.active_worker = None
         log_error(f"handle_ai_error invoked: {err_msg}")
         self.dialog_manager.hide_loading()
-        self.dialog_manager.show_error("AI Not Çıkarma Hatası", f"Not çıkarma sırasında bir hata oluştu:\n{err_msg}")
-        self.show_snack_bar(f"Hata: {err_msg}", color=ft.Colors.ERROR)
+        time.sleep(0.35)
+        self.dialog_manager.show_error("AI Note Generation Error", f"An error occurred during note generation:\n{err_msg}")
+        self.show_snack_bar(f"Error: {err_msg}", color=ft.Colors.ERROR)
 
     async def trigger_pdf_generation(self, e=None):
         """Prompts user to select a PDF and launches background AI worker."""
         if not self.pdf_file_picker:
             return
         files = await self.pdf_file_picker.pick_files(
-            dialog_title="PDF Dosyası Seç",
+            dialog_title="Select PDF File",
             allowed_extensions=["pdf"]
         )
         if files:
             pdf_path = files[0].path
             self.dialog_manager.show_loading(
-                title="PDF'ten Not Çıkarılıyor",
-                message="PDF'ten metin çıkarılıyor... Lütfen bekleyiniz.",
+                title="Generating Notes from PDF",
+                message="Extracting text from PDF... Please wait.",
                 on_cancel=self.cancel_worker
             )
             try:
                 extracted_text = pdf_processor.extract_text_from_pdf(pdf_path)
             except Exception as ex:
                 self.dialog_manager.hide_loading()
-                self.show_snack_bar(f"PDF okunamadı: {ex}", color=ft.Colors.ERROR)
+                time.sleep(0.35)
+                self.show_snack_bar(f"Failed to read PDF: {ex}", color=ft.Colors.ERROR)
                 return
 
             if extracted_text and extracted_text.strip():
-                self.dialog_manager.update_loading_message("Notlar üretiliyor... Lütfen bekleyiniz.")
+                self.dialog_manager.update_loading_message("Generating notes... Please wait.")
                 worker = AiNoteGeneratorWorker(
                     extracted_text,
                     on_finished=self.handle_ai_finished,
@@ -668,9 +671,10 @@ class AppController:
                 self.page.run_thread(worker.run)
             else:
                 self.dialog_manager.hide_loading()
-                self.show_snack_bar("Seçilen PDF dosyası boş veya okunabilir metin içermiyor.", color=ft.Colors.ERROR)
+                time.sleep(0.35)
+                self.show_snack_bar("The selected PDF is empty or contains no readable text.", color=ft.Colors.ERROR)
         else:
-            self.show_snack_bar("PDF dosyası seçilmedi.", color=ft.Colors.TERTIARY)
+            self.show_snack_bar("No PDF file selected.", color=ft.Colors.TERTIARY)
 
     def on_left_drag(self, e: ft.DragUpdateEvent):
         """Resizes or collapses left sidebar."""
@@ -730,10 +734,10 @@ class AppController:
                 self.guard_unsaved_changes(self.new_note_internal)
             elif k == "b":
                 if self.editor_workspace:
-                    self.editor_workspace.wrap_selection("**", "**", "kalın metin")
+                    self.editor_workspace.wrap_selection("**", "**", "bold text")
             elif k == "i":
                 if self.editor_workspace:
-                    self.editor_workspace.wrap_selection("*", "*", "italik metin")
+                    self.editor_workspace.wrap_selection("*", "*", "italic text")
             elif k == "k":
                 if self.editor_workspace:
                     self.editor_workspace.open_wikilink_picker()

@@ -1,6 +1,6 @@
 # test_markdown_editor.py
 #
-# Unit tests for MarkdownEditorWidget (Kaynak ve Okuma modları).
+# Unit tests for MarkdownEditorWidget (Source and Reading modes).
 
 import pytest
 import os
@@ -221,12 +221,12 @@ def test_markdown_editor_formatting_helpers():
     # Insert Table
     editor.set_value("")
     editor.insert_table_template()
-    assert "| Başlık 1 |" in editor.get_value()
+    assert "| Header 1 |" in editor.get_value()
 
     # Insert Link
     editor.set_value("")
     editor.insert_link()
-    assert "[Bağlantı Metni](https://example.com)" in editor.get_value()
+    assert "[Link Text](https://example.com)" in editor.get_value()
 
     # Prepend Numbered list
     editor.set_value("First item\nSecond item")

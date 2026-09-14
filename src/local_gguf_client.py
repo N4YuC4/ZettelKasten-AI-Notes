@@ -68,8 +68,8 @@ class LocalGgufClient(BaseAiProvider):
     ):
         if not model_path or not os.path.exists(model_path):
             raise LocalModelNotFoundError(
-                f"Lokal GGUF model dosyası bulunamadı: '{model_path}'. "
-                "Lütfen Ayarlar -> Model Yöneticisi üzerinden modeli indiriniz."
+                f"Local GGUF model file not found: '{model_path}'. "
+                "Please download the model via Settings -> Model Manager."
             )
 
         self.model_path = os.path.abspath(model_path)
@@ -118,8 +118,8 @@ class LocalGgufClient(BaseAiProvider):
             q8_type = getattr(llama_cpp, "GGML_TYPE_Q8_0", None)
         except ImportError as e:
             raise LocalLlmError(
-                "llama-cpp-python kütüphanesi kurulu değil. "
-                "Lütfen 'pip install llama-cpp-python' komutunu çalıştırınız."
+                "The llama-cpp-python library is not installed. "
+                "Please run 'pip install llama-cpp-python'."
             ) from e
 
         # Build 16K granular context fallback ladder
@@ -183,7 +183,7 @@ class LocalGgufClient(BaseAiProvider):
 
         log_error(f"Failed to load GGUF model across all fallback context levels: {last_error}\n{traceback.format_exc()}")
         raise LocalModelOOMError(
-            f"Model için bellek tahsis edilemedi (en düşük bağlam seviyesinde dahi yetersiz bellek): {last_error}"
+            f"Failed to allocate memory for model (insufficient memory even at lowest context level): {last_error}"
         ) from last_error
 
     @classmethod
@@ -337,7 +337,7 @@ class LocalGgufClient(BaseAiProvider):
             )
         except Exception as e:
             log_error(f"Local LLM inference failed: {e}\n{traceback.format_exc()}")
-            raise LocalLlmError(f"Yerel model çıkarım hatası: {e}") from e
+            raise LocalLlmError(f"Local model inference error: {e}") from e
 
         if not response or "choices" not in response or not response["choices"]:
             return []
@@ -348,7 +348,7 @@ class LocalGgufClient(BaseAiProvider):
         parsed_notes = self._parse_notes_json(content)
         if not parsed_notes and content.strip():
             log_error(f"Failed to parse notes from local LLM response: {content[:300]}")
-            raise LocalLlmError(f"Yerel model çıktısı ayrıştırılamadı: {content[:200]}")
+            raise LocalLlmError(f"Failed to parse local model output: {content[:200]}")
 
         return parsed_notes
 
@@ -404,7 +404,7 @@ class LocalGgufClient(BaseAiProvider):
         # 1. Single pass if within context budget
         if total_tokens <= max_prompt_tokens:
             if on_progress:
-                on_progress("Yapay zeka notları çıkarıyor...")
+                on_progress("AI is extracting notes...")
             return self._execute_inference(sanitized_text)
 
         # 2. Document exceeds budget -> semantic chunking with Chained JSON Context
@@ -422,7 +422,7 @@ class LocalGgufClient(BaseAiProvider):
         previous_chunk_json: Optional[str] = None
 
         for idx, chunk in enumerate(chunks):
-            progress_msg = f"Yapay zeka notları çıkarıyor (Bölüm {idx + 1}/{len(chunks)})..."
+            progress_msg = f"AI is extracting notes (Part {idx + 1}/{len(chunks)})..."
             log_debug(f"{progress_msg} ({len(chunk)} chars)")
             if on_progress:
                 on_progress(progress_msg)
@@ -504,7 +504,7 @@ class LocalGgufClient(BaseAiProvider):
 
         log_debug(f"Starting Stage 2: Global Knowledge Graph Linking for {len(notes)} notes...")
         if on_progress:
-            on_progress("Notlar arası kavramsal bağlantılar çözümleniyor...")
+            on_progress("Analyzing conceptual links between notes...")
 
         # Prepare numbered notes export for prompt input
         full_notes_payload = [

@@ -60,13 +60,13 @@ def create_ai_provider(
             model_info = local_models_catalog.get_model_by_id(active_model_id)
             if not model_info:
                 from local_gguf_client import LocalModelNotFoundError
-                raise LocalModelNotFoundError(f"Seçili model kataloğda bulunamadı: '{active_model_id}'")
+                raise LocalModelNotFoundError(f"Selected model not found in catalog: '{active_model_id}'")
             model_path = model_downloader.ModelDownloader.get_model_path(model_info, models_dir)
             if not model_downloader.ModelDownloader.is_model_downloaded(model_info, models_dir):
                 from local_gguf_client import LocalModelNotFoundError
                 raise LocalModelNotFoundError(
-                    f"'{model_info.display_name}' henüz indirilmemiş. "
-                    "Lütfen Ayarlar -> Model Yöneticisi penceresinden modeli indiriniz."
+                    f"'{model_info.display_name}' has not been downloaded yet. "
+                    "Please download the model via Settings -> Model Manager."
                 )
 
         if n_gpu_layers is None and db_manager:

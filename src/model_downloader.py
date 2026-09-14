@@ -31,19 +31,19 @@ class DownloadStatus:
 
 
 def format_eta(seconds: Optional[int]) -> str:
-    """Formats seconds into human-readable Turkish ETA string."""
+    """Formats seconds into human-readable ETA string."""
     if seconds is None or seconds <= 0:
         return ""
     if seconds < 60:
-        return f" • Kalan: {seconds} sn"
+        return f" • Remaining: {seconds}s"
     elif seconds < 3600:
         m = seconds // 60
         s = seconds % 60
-        return f" • Kalan: {m} dk {s} sn" if s > 0 else f" • Kalan: {m} dk"
+        return f" • Remaining: {m}m {s}s" if s > 0 else f" • Remaining: {m}m"
     else:
         h = seconds // 3600
         m = (seconds % 3600) // 60
-        return f" • Kalan: {h} sa {m} dk"
+        return f" • Remaining: {h}h {m}m"
 
 
 class ModelDownloader:
@@ -154,7 +154,7 @@ class ModelDownloader:
             if model_id in cls._status_registry:
                 st = cls._status_registry[model_id]
                 st.state = "idle"
-                st.status_text = "İndirme iptal edildi."
+                st.status_text = "Download cancelled."
         cls._notify_listeners(model_id)
 
     @classmethod
@@ -198,7 +198,7 @@ class ModelDownloader:
                 state="downloading",
                 progress=0.0,
                 total_bytes=model.size_bytes,
-                status_text="Bağlantı kuruluyor..."
+                status_text="Connecting..."
             )
         cls._notify_listeners(model.id)
 
@@ -350,7 +350,7 @@ class ModelDownloader:
                     tot_gb = total_bytes / (1024 ** 3) if total_bytes else model.size_gb
                     progress = min(1.0, max(0.0, cur_downloaded / total_bytes)) if total_bytes else 0.0
 
-                    retry_status = f"{cur_gb:.2f} GB / {tot_gb:.2f} GB — Bağlantı koptu, otomatik devam ediliyor... ({retry_count}/{MAX_RETRIES})"
+                    retry_status = f"{cur_gb:.2f} GB / {tot_gb:.2f} GB — Connection dropped, automatically reconnecting... ({retry_count}/{MAX_RETRIES})"
 
                     with cls._lock:
                         cls._status_registry[model.id] = DownloadStatus(
@@ -367,7 +367,7 @@ class ModelDownloader:
                     cls._notify_listeners(model.id)
 
                     if retry_count >= MAX_RETRIES:
-                        final_err = f"İndirme başarısız ({MAX_RETRIES} ardışık deneme): {err_msg}"
+                        final_err = f"Download failed ({MAX_RETRIES} consecutive attempts): {err_msg}"
                         with cls._lock:
                             cls._status_registry[model.id] = DownloadStatus(
                                 model_id=model.id,
@@ -403,7 +403,7 @@ class ModelDownloader:
                         progress=1.0,
                         downloaded_bytes=total_bytes,
                         total_bytes=total_bytes,
-                        status_text="İndirme tamamlandı!"
+                        status_text="Download complete!"
                     )
                 cls._notify_listeners(model.id)
 
@@ -414,7 +414,7 @@ class ModelDownloader:
                         log_error(f"Error in on_finished callback: {fe}")
             except Exception as fin_err:
                 log_error(f"Failed to finalize downloaded file: {fin_err}")
-                err_text = f"Dosya kaydedilemedi: {fin_err}"
+                err_text = f"Failed to save file: {fin_err}"
                 with cls._lock:
                     cls._status_registry[model.id] = DownloadStatus(
                         model_id=model.id,

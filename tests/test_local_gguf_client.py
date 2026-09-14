@@ -262,7 +262,7 @@ def test_generate_zettelkasten_notes_calls_on_progress():
     assert len(notes) == 1
     assert notes[0]["title"] == "Progress Note"
     assert len(progress_messages) > 0
-    assert any("notlar" in m.lower() for m in progress_messages)
+    assert any("notes" in m.lower() for m in progress_messages)
 
 
 def test_default_context_window_is_128k():
@@ -405,7 +405,7 @@ def test_generate_note_links_full_content_and_attachment():
             "message": {
                 "content": json.dumps({
                     "links": [
-                        {"source": "PHP Değişkenleri", "target": "PHP Veri Tipleri"}
+                        {"source": "PHP Variables", "target": "PHP Data Types"}
                     ]
                 })
             }
@@ -414,8 +414,8 @@ def test_generate_note_links_full_content_and_attachment():
     client.llm = mock_llm
 
     notes = [
-        {"title": "PHP Değişkenleri", "content": "Değişkenler $ ile tanımlanır ve değer saklar.", "connections": []},
-        {"title": "PHP Veri Tipleri", "content": "String, integer, boolean gibi türler mevcuttur.", "connections": []}
+        {"title": "PHP Variables", "content": "Variables are defined with $ and store values.", "connections": []},
+        {"title": "PHP Data Types", "content": "Types such as string, integer, and boolean are supported.", "connections": []}
     ]
 
     result = client.generate_note_links(notes)
@@ -425,14 +425,14 @@ def test_generate_note_links_full_content_and_attachment():
     messages = call_args["messages"]
     user_prompt = messages[1]["content"]
 
-    assert "PHP Değişkenleri" in user_prompt
-    assert "Değişkenler $ ile tanımlanır" in user_prompt
-    assert "PHP Veri Tipleri" in user_prompt
-    assert "String, integer, boolean" in user_prompt
+    assert "PHP Variables" in user_prompt
+    assert "Variables are defined with $" in user_prompt
+    assert "PHP Data Types" in user_prompt
+    assert "string, integer, and boolean" in user_prompt
 
     # Check connection was attached
-    assert "PHP Veri Tipleri" in result[0]["connections"]
-    assert "PHP Değişkenleri" in result[1]["connections"]
+    assert "PHP Data Types" in result[0]["connections"]
+    assert "PHP Variables" in result[1]["connections"]
 
 
 def test_generate_note_links_single_note_noop():
@@ -553,18 +553,18 @@ def test_granular_16k_fallback_ladder_on_memory_error(tmp_path):
 def test_parse_notes_json_with_numeric_ids_and_top_level_links():
     client = LocalGgufClient.__new__(LocalGgufClient)
     sample_response = json.dumps({
-        "general_title": "Bilinç Teorisi",
+        "general_title": "Consciousness Theory",
         "notes": [
             {
                 "id": 1,
-                "title": "Çökme Mekanizması",
-                "content": "Kuantum durumunun deterministik çöküşü.",
+                "title": "Collapse Mechanism",
+                "content": "Deterministic reduction of quantum state.",
                 "connections": []
             },
             {
                 "id": 2,
-                "title": "Aday Üretim Süreci",
-                "content": "Olası durumların türetilmesi.",
+                "title": "Candidate Generation Process",
+                "content": "Derivation of probable states.",
                 "connections": []
             }
         ],
@@ -574,35 +574,35 @@ def test_parse_notes_json_with_numeric_ids_and_top_level_links():
     })
     res = client._parse_notes_json(sample_response)
     assert len(res) == 2
-    assert res[0]["title"] == "Çökme Mekanizması"
-    assert res[0]["connections"] == ["Aday Üretim Süreci"]
-    assert res[1]["title"] == "Aday Üretim Süreci"
-    assert res[1]["connections"] == ["Çökme Mekanizması"]
+    assert res[0]["title"] == "Collapse Mechanism"
+    assert res[0]["connections"] == ["Candidate Generation Process"]
+    assert res[1]["title"] == "Candidate Generation Process"
+    assert res[1]["connections"] == ["Collapse Mechanism"]
 
 
 def test_parse_notes_json_with_in_note_numeric_connections():
     client = LocalGgufClient.__new__(LocalGgufClient)
     sample_response = json.dumps({
-        "general_title": "Felsefe",
+        "general_title": "Philosophy",
         "notes": [
             {
                 "id": 1,
-                "title": "Bilinç Durumu",
-                "content": "Açıklama 1",
+                "title": "Conscious State",
+                "content": "Description 1",
                 "connections": [2]
             },
             {
                 "id": 2,
-                "title": "Gözlemci Etkisi",
-                "content": "Açıklama 2",
+                "title": "Observer Effect",
+                "content": "Description 2",
                 "connections": ["1"]
             }
         ]
     })
     res = client._parse_notes_json(sample_response)
     assert len(res) == 2
-    assert res[0]["connections"] == ["Gözlemci Etkisi"]
-    assert res[1]["connections"] == ["Bilinç Durumu"]
+    assert res[0]["connections"] == ["Observer Effect"]
+    assert res[1]["connections"] == ["Conscious State"]
 
 
 def test_generate_note_links_with_integer_ids():
@@ -623,17 +623,17 @@ def test_generate_note_links_with_integer_ids():
     client.llm = mock_llm
 
     notes = [
-        {"title": "Kavram A", "content": "Açıklama A", "connections": []},
-        {"title": "Kavram B", "content": "Açıklama B", "connections": []},
-        {"title": "Kavram C", "content": "Açıklama C", "connections": []}
+        {"title": "Concept A", "content": "Description A", "connections": []},
+        {"title": "Concept B", "content": "Description B", "connections": []},
+        {"title": "Concept C", "content": "Description C", "connections": []}
     ]
 
     linked_notes = client.generate_note_links(notes)
     assert len(linked_notes) == 3
-    assert "Kavram B" in linked_notes[0]["connections"]
-    assert "Kavram A" in linked_notes[1]["connections"]
-    assert "Kavram C" in linked_notes[1]["connections"]
-    assert "Kavram B" in linked_notes[2]["connections"]
+    assert "Concept B" in linked_notes[0]["connections"]
+    assert "Concept A" in linked_notes[1]["connections"]
+    assert "Concept C" in linked_notes[1]["connections"]
+    assert "Concept B" in linked_notes[2]["connections"]
 
 
 def test_generate_note_links_with_string_digits():

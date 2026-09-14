@@ -89,7 +89,7 @@ class SidebarView(ft.Container):
                     icon=ft.Icons.KEYBOARD_DOUBLE_ARROW_RIGHT,
                     icon_color=ft.Colors.PRIMARY,
                     icon_size=20,
-                    tooltip="Genişlet (Ctrl+[)",
+                    tooltip="Expand (Ctrl+[)",
                     on_click=lambda e: self.on_collapse_clicked() if self.on_collapse_clicked else self.toggle_collapsed()
                 ),
                 ft.Divider(height=1, thickness=1),
@@ -97,21 +97,21 @@ class SidebarView(ft.Container):
                     icon=ft.Icons.FOLDER_OPEN,
                     icon_color=ft.Colors.ON_SURFACE_VARIANT,
                     icon_size=18,
-                    tooltip="Koleksiyonlar",
+                    tooltip="Collections",
                     on_click=lambda e: self.set_collapsed(False)
                 ),
                 ft.IconButton(
                     icon=ft.Icons.SEARCH,
                     icon_color=ft.Colors.ON_SURFACE_VARIANT,
                     icon_size=18,
-                    tooltip="Not Ara",
+                    tooltip="Search Notes",
                     on_click=lambda e: self.set_collapsed(False)
                 ),
                 ft.IconButton(
                     icon=ft.Icons.ARTICLE,
                     icon_color=ft.Colors.ON_SURFACE_VARIANT,
                     icon_size=18,
-                    tooltip="Notlar Listesi",
+                    tooltip="Notes List",
                     on_click=lambda e: self.set_collapsed(False)
                 ),
                 ft.Container(expand=True),
@@ -119,7 +119,7 @@ class SidebarView(ft.Container):
                     icon=ft.Icons.SETTINGS,
                     icon_color=ft.Colors.ON_SURFACE_VARIANT,
                     icon_size=18,
-                    tooltip="Ayarlar",
+                    tooltip="Settings",
                     on_click=lambda e: self.on_settings_clicked()
                 )
             ], expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
@@ -135,7 +135,7 @@ class SidebarView(ft.Container):
                         icon=ft.Icons.KEYBOARD_DOUBLE_ARROW_LEFT,
                         icon_color=ft.Colors.ON_SURFACE_VARIANT,
                         icon_size=18,
-                        tooltip="Daralt (Ctrl+[)",
+                        tooltip="Collapse (Ctrl+[)",
                         on_click=lambda e: self.on_collapse_clicked() if self.on_collapse_clicked else self.toggle_collapsed()
                     )
                 )

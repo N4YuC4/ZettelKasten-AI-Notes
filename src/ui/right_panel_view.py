@@ -101,7 +101,7 @@ class RightPanelView(ft.Container):
                     icon=ft.Icons.KEYBOARD_DOUBLE_ARROW_LEFT,
                     icon_color=ft.Colors.PRIMARY,
                     icon_size=20,
-                    tooltip="Genişlet (Ctrl+])",
+                    tooltip="Expand (Ctrl+])",
                     on_click=lambda e: self.on_collapse_clicked() if self.on_collapse_clicked else self.toggle_collapsed()
                 ),
                 ft.Divider(height=1, thickness=1),
@@ -109,14 +109,14 @@ class RightPanelView(ft.Container):
                     icon=ft.Icons.HUB,
                     icon_color=ft.Colors.ON_SURFACE_VARIANT,
                     icon_size=18,
-                    tooltip="Zihin Haritası",
+                    tooltip="Mind Map",
                     on_click=lambda e: self.set_collapsed(False)
                 ),
                 ft.IconButton(
                     icon=ft.Icons.LINK,
                     icon_color=ft.Colors.ON_SURFACE_VARIANT,
                     icon_size=18,
-                    tooltip="Bağlantılar",
+                    tooltip="Connections",
                     on_click=lambda e: self.set_collapsed(False)
                 ),
             ], expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6)
@@ -132,7 +132,7 @@ class RightPanelView(ft.Container):
                         icon=ft.Icons.KEYBOARD_DOUBLE_ARROW_RIGHT,
                         icon_color=ft.Colors.ON_SURFACE_VARIANT,
                         icon_size=18,
-                        tooltip="Daralt (Ctrl+])",
+                        tooltip="Collapse (Ctrl+])",
                         on_click=lambda e: self.on_collapse_clicked() if self.on_collapse_clicked else self.toggle_collapsed()
                     )
                 )

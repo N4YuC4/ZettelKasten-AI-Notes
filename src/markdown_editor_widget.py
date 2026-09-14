@@ -1,9 +1,9 @@
 # markdown_editor_widget.py
 #
-# Zettelkasten AI Notes için Markdown Editör Bileşeni.
-# İki temel mod sunar:
-# 1. Kaynak Modu: Markdown metninin doğrudan yazıldığı ve biçimlendirildiği editör.
-# 2. Okuma Modu: Markdown metninin renderlandığı ve WikiLink bağlantılarının tıklanabildiği görünüm.
+# Markdown Editor Component for Zettelkasten AI Notes.
+# Provides two primary modes:
+# 1. Source Mode: Direct markdown editing and formatting toolbar.
+# 2. Reading Mode: Rendered markdown view with clickable WikiLinks and LaTeX math support.
 
 import flet as ft
 import urllib.parse
@@ -35,7 +35,7 @@ def _get_page(ctrl: ft.Control) -> Optional[ft.Page]:
 
 class MarkdownEditorWidget(ft.Container):
     """
-    Kaynak ve Okuma modlarını içeren Markdown Editör Bileşeni.
+    Markdown Editor Component featuring Source and Reading modes.
     """
     def __init__(
         self,
@@ -52,7 +52,7 @@ class MarkdownEditorWidget(ft.Container):
         self.on_save_shortcut = on_save_shortcut
         self.on_blur = on_blur
 
-        # Modlar: 'source' (Kaynak / Düzenleme) veya 'reading' (Okuma / Önizleme)
+        # Modes: 'source' (Source / Edit) or 'reading' (Reading / Preview)
         self.current_mode = "source"
         self._raw_content = ""
         self._selection_start = 0
@@ -65,11 +65,11 @@ class MarkdownEditorWidget(ft.Container):
         self._build_layout()
 
     def _init_controls(self):
-        # Kaynak Modu: Standart metin alanı
+        # Source Mode: Standard text field
         self.editor_field = ft.TextField(
             multiline=True,
             expand=True,
-            hint_text="Notunuzu buraya yazın...\nBiçimlendirme için araç çubuğunu veya Markdown formatını (#, **, [[Not]]) kullanabilirsiniz.",
+            hint_text="Write your note here...\nYou can use the toolbar or Markdown formatting (#, **, [[Note]]) for styling.",
             border=ft.InputBorder.NONE,
             text_size=15,
             content_padding=ft.Padding.all(18),
@@ -80,9 +80,9 @@ class MarkdownEditorWidget(ft.Container):
             on_blur=self._handle_editor_blur,
         )
 
-        # Okuma Modu: Renderlanmış Markdown görünümü (LaTeX ve WikiLink destekli)
+        # Reading Mode: Rendered Markdown view (LaTeX and WikiLink supported)
         self.reading_markdown_view = ft.Markdown(
-            value="*Henüz bir içerik yok.*",
+            value="*No content yet.*",
             selectable=True,
             extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
             code_theme="atom-one-dark",
@@ -104,26 +104,26 @@ class MarkdownEditorWidget(ft.Container):
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         )
 
-        # Mod Seçici: Kaynak | Okuma
+        # Mode Selector: Source | Reading
         self.mode_toggle_btn = ft.SegmentedButton(
             selected=["source"],
             allow_multiple_selection=False,
             show_selected_icon=True,
             segments=[
-                ft.Segment(value="source", label=ft.Text("Kaynak", size=12), icon=ft.Icon(ft.Icons.EDIT_NOTE, size=16)),
-                ft.Segment(value="reading", label=ft.Text("Okuma", size=12), icon=ft.Icon(ft.Icons.MENU_BOOK, size=16)),
+                ft.Segment(value="source", label=ft.Text("Source", size=12), icon=ft.Icon(ft.Icons.EDIT_NOTE, size=16)),
+                ft.Segment(value="reading", label=ft.Text("Reading", size=12), icon=ft.Icon(ft.Icons.MENU_BOOK, size=16)),
             ],
             on_change=self._handle_mode_change,
         )
 
-        # İstatistikler
+        # Statistics
         self.stats_text = ft.Text(
-            "0 kelime | 0 karakter | 0 satır | ~0 dk",
+            "0 words | 0 characters | 0 lines | ~0 min read",
             size=11,
             color=ft.Colors.ON_SURFACE_VARIANT,
         )
 
-        # Kaydedilmemiş değişiklik uyarısı
+        # Unsaved changes indicator
         self.dirty_indicator = ft.Text(
             "",
             size=11,
@@ -131,9 +131,9 @@ class MarkdownEditorWidget(ft.Container):
             weight=ft.FontWeight.BOLD,
         )
 
-        # WikiLink Seçim Modalı
+        # WikiLink Selection Modal
         self.wikilink_dialog = ft.AlertDialog(
-            title=ft.Text("WikiLink Ekle [[...]]", size=16, weight=ft.FontWeight.BOLD),
+            title=ft.Text("Add WikiLink [[...]]", size=16, weight=ft.FontWeight.BOLD),
             content=ft.Container(width=350, height=300),
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END,
@@ -154,36 +154,36 @@ class MarkdownEditorWidget(ft.Container):
     def _build_toolbar(self) -> ft.Row:
         return ft.Row(
             controls=[
-                # Başlıklar
+                # Headings
                 ft.PopupMenuButton(
                     icon=ft.Icons.TITLE,
-                    tooltip="Başlık Seviyesi",
+                    tooltip="Heading Level",
                     items=[
-                        ft.PopupMenuItem(content=ft.Text("H1 - Başlık 1"), on_click=lambda e: self.format_heading(1)),
-                        ft.PopupMenuItem(content=ft.Text("H2 - Başlık 2"), on_click=lambda e: self.format_heading(2)),
-                        ft.PopupMenuItem(content=ft.Text("H3 - Başlık 3"), on_click=lambda e: self.format_heading(3)),
-                        ft.PopupMenuItem(content=ft.Text("H4 - Başlık 4"), on_click=lambda e: self.format_heading(4)),
+                        ft.PopupMenuItem(content=ft.Text("H1 - Heading 1"), on_click=lambda e: self.format_heading(1)),
+                        ft.PopupMenuItem(content=ft.Text("H2 - Heading 2"), on_click=lambda e: self.format_heading(2)),
+                        ft.PopupMenuItem(content=ft.Text("H3 - Heading 3"), on_click=lambda e: self.format_heading(3)),
+                        ft.PopupMenuItem(content=ft.Text("H4 - Heading 4"), on_click=lambda e: self.format_heading(4)),
                     ],
                 ),
                 ft.VerticalDivider(width=1, thickness=1, color=ft.Colors.OUTLINE_VARIANT),
-                # Metin Biçimleri
-                self._create_toolbar_button(ft.Icons.FORMAT_BOLD, "Kalın (Ctrl+B)", lambda e: self.wrap_selection("**", "**", "kalın metin")),
-                self._create_toolbar_button(ft.Icons.FORMAT_ITALIC, "İtalik (Ctrl+I)", lambda e: self.wrap_selection("*", "*", "italik metin")),
-                self._create_toolbar_button(ft.Icons.FORMAT_STRIKETHROUGH, "Üstü Çizili", lambda e: self.wrap_selection("~~", "~~", "üstü çizili")),
-                self._create_toolbar_button(ft.Icons.CODE, "Satır İçi Kod", lambda e: self.wrap_selection("`", "`", "kod")),
+                # Text Styles
+                self._create_toolbar_button(ft.Icons.FORMAT_BOLD, "Bold (Ctrl+B)", lambda e: self.wrap_selection("**", "**", "bold text")),
+                self._create_toolbar_button(ft.Icons.FORMAT_ITALIC, "Italic (Ctrl+I)", lambda e: self.wrap_selection("*", "*", "italic text")),
+                self._create_toolbar_button(ft.Icons.FORMAT_STRIKETHROUGH, "Strikethrough", lambda e: self.wrap_selection("~~", "~~", "strikethrough")),
+                self._create_toolbar_button(ft.Icons.CODE, "Inline Code", lambda e: self.wrap_selection("`", "`", "code")),
                 ft.VerticalDivider(width=1, thickness=1, color=ft.Colors.OUTLINE_VARIANT),
-                # Blok Biçimleri
-                self._create_toolbar_button(ft.Icons.FORMAT_QUOTE, "Alıntı Bloğu", lambda e: self.prepend_lines("> ")),
-                self._create_toolbar_button(ft.Icons.INTEGRATION_INSTRUCTIONS, "Kod Bloğu", lambda e: self.insert_code_block()),
-                self._create_toolbar_button(ft.Icons.FORMAT_LIST_BULLETED, "Madde İmi Listesi", lambda e: self.prepend_lines("- ")),
-                self._create_toolbar_button(ft.Icons.FORMAT_LIST_NUMBERED, "Numaralı Liste", lambda e: self.prepend_numbered_list()),
-                self._create_toolbar_button(ft.Icons.CHECK_BOX_OUTLINED, "Görev Kutusu", lambda e: self.prepend_lines("- [ ] ")),
+                # Block Styles
+                self._create_toolbar_button(ft.Icons.FORMAT_QUOTE, "Quote Block", lambda e: self.prepend_lines("> ")),
+                self._create_toolbar_button(ft.Icons.INTEGRATION_INSTRUCTIONS, "Code Block", lambda e: self.insert_code_block()),
+                self._create_toolbar_button(ft.Icons.FORMAT_LIST_BULLETED, "Bulleted List", lambda e: self.prepend_lines("- ")),
+                self._create_toolbar_button(ft.Icons.FORMAT_LIST_NUMBERED, "Numbered List", lambda e: self.prepend_numbered_list()),
+                self._create_toolbar_button(ft.Icons.CHECK_BOX_OUTLINED, "Task Checkbox", lambda e: self.prepend_lines("- [ ] ")),
                 ft.VerticalDivider(width=1, thickness=1, color=ft.Colors.OUTLINE_VARIANT),
-                # Bağlantılar ve Tablo
-                self._create_toolbar_button(ft.Icons.LINK, "Web Bağlantısı", lambda e: self.insert_link()),
+                # Links & Table
+                self._create_toolbar_button(ft.Icons.LINK, "Web Link", lambda e: self.insert_link()),
                 self._create_toolbar_button(ft.Icons.POLYMER, "WikiLink [[...]]", lambda e: self.open_wikilink_picker()),
-                self._create_toolbar_button(ft.Icons.TABLE_CHART, "Tablo Ekle", lambda e: self.insert_table_template()),
-                self._create_toolbar_button(ft.Icons.HORIZONTAL_RULE, "Yatay Çizgi", lambda e: self.insert_text("\n\n---\n\n")),
+                self._create_toolbar_button(ft.Icons.TABLE_CHART, "Insert Table", lambda e: self.insert_table_template()),
+                self._create_toolbar_button(ft.Icons.HORIZONTAL_RULE, "Horizontal Rule", lambda e: self.insert_text("\n\n---\n\n")),
             ],
             scroll=ft.ScrollMode.AUTO,
             alignment=ft.MainAxisAlignment.START,
@@ -232,7 +232,7 @@ class MarkdownEditorWidget(ft.Container):
                         self.dirty_indicator,
                         self.stats_text,
                     ], spacing=10),
-                    ft.Text("Markdown Editör • Ctrl+E ile Mod Değiştir", size=11, color=ft.Colors.OUTLINE),
+                    ft.Text("Markdown Editor • Switch Mode with Ctrl+E", size=11, color=ft.Colors.OUTLINE),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -251,10 +251,10 @@ class MarkdownEditorWidget(ft.Container):
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         )
 
-    # --- Mod Yönetimi ---
+    # --- Mode Management ---
 
     def set_mode(self, mode: str):
-        """Görünüm modunu değiştirir: 'source' (Kaynak) veya 'reading' (Okuma)."""
+        """Switches display mode: 'source' (Source) or 'reading' (Reading)."""
         if mode not in ("source", "reading"):
             return
         
@@ -266,14 +266,14 @@ class MarkdownEditorWidget(ft.Container):
             self.main_view_area.content = self.editor_field
             self.toolbar.visible = True
         elif mode == "reading":
-            self.reading_markdown_view.value = process_markdown_wikilinks(self._raw_content) if self._raw_content.strip() else "*Henüz içerik yok.*"
+            self.reading_markdown_view.value = process_markdown_wikilinks(self._raw_content) if self._raw_content.strip() else "*No content yet.*"
             self.main_view_area.content = self.reading_scroll_view
             self.toolbar.visible = False
 
         _safe_update(self)
 
     def toggle_mode(self):
-        """Kaynak ve Okuma modları arasında geçiş yapar (Ctrl+E kısayolu)."""
+        """Toggles between Source and Reading modes (Ctrl+E shortcut)."""
         new_mode = "reading" if self.current_mode == "source" else "source"
         self.set_mode(new_mode)
 
@@ -283,7 +283,7 @@ class MarkdownEditorWidget(ft.Container):
             new_mode = selected_items[0] if isinstance(selected_items, (list, tuple)) else next(iter(selected_items))
             self.set_mode(new_mode)
 
-    # --- İçerik Yönetimi ---
+    # --- Content Management ---
 
     def get_value(self) -> str:
         return self._raw_content
@@ -296,7 +296,7 @@ class MarkdownEditorWidget(ft.Container):
         self._update_stats()
         
         if self.current_mode == "reading":
-            self.reading_markdown_view.value = process_markdown_wikilinks(self._raw_content) if self._raw_content.strip() else "*Henüz içerik yok.*"
+            self.reading_markdown_view.value = process_markdown_wikilinks(self._raw_content) if self._raw_content.strip() else "*No content yet.*"
             _safe_update(self.reading_markdown_view)
         else:
             _safe_update(self.editor_field)
@@ -305,7 +305,7 @@ class MarkdownEditorWidget(ft.Container):
         _safe_update(self)
 
     def set_dirty(self, is_dirty: bool):
-        self.dirty_indicator.value = "● Kaydedilmemiş değişiklikler" if is_dirty else ""
+        self.dirty_indicator.value = "● Unsaved changes" if is_dirty else ""
         _safe_update(self.dirty_indicator)
 
     def _handle_editor_change(self, e):
@@ -328,7 +328,7 @@ class MarkdownEditorWidget(ft.Container):
 
     def _update_stats(self):
         stats = calculate_document_stats(self._raw_content)
-        self.stats_text.value = f"{stats.words} kelime | {stats.chars} karakter | {stats.lines} satır | ~{stats.reading_time_min} dk okuma"
+        self.stats_text.value = f"{stats.words} words | {stats.chars} characters | {stats.lines} lines | ~{stats.reading_time_min} min read"
         _safe_update(self.stats_text)
 
     def _handle_link_tap(self, e):
@@ -351,7 +351,7 @@ class MarkdownEditorWidget(ft.Container):
             except Exception:
                 pass
 
-    # --- Biçimlendirme Araçları ---
+    # --- Formatting Tools ---
 
     def _apply_content_update(self, new_text: str):
         self._raw_content = new_text
@@ -459,10 +459,10 @@ class MarkdownEditorWidget(ft.Container):
 
     def insert_table_template(self):
         table_md = (
-            "\n| Başlık 1 | Başlık 2 | Başlık 3 |\n"
+            "\n| Header 1 | Header 2 | Header 3 |\n"
             "| :--- | :--- | :--- |\n"
-            "| Değer A | Değer B | Değer C |\n"
-            "| Değer D | Değer E | Değer F |\n\n"
+            "| Value A | Value B | Value C |\n"
+            "| Value D | Value E | Value F |\n\n"
         )
         self.insert_text(table_md)
 
@@ -473,10 +473,10 @@ class MarkdownEditorWidget(ft.Container):
         if start > end:
             start, end = end, start
         selected = current_text[start:end] if start != end else ""
-        title = selected if selected else "Bağlantı Metni"
+        title = selected if selected else "Link Text"
         self.insert_text(f"[{title}](https://example.com)")
 
-    # --- WikiLink Seçici ---
+    # --- WikiLink Picker ---
 
     def open_wikilink_picker(self):
         pg = _get_page(self)
@@ -488,7 +488,7 @@ class MarkdownEditorWidget(ft.Container):
             all_notes = self.get_all_notes_callback()
 
         search_box = ft.TextField(
-            hint_text="Notlarda ara...",
+            hint_text="Search notes...",
             prefix_icon=ft.Icons.SEARCH,
             dense=True,
             autofocus=True,
@@ -517,7 +517,7 @@ class MarkdownEditorWidget(ft.Container):
                         ft.ListTile(
                             leading=ft.Icon(ft.Icons.NOTE, size=18, color=ft.Colors.PRIMARY),
                             title=ft.Text(title, size=13, weight=ft.FontWeight.W_500),
-                            subtitle=ft.Text(f"Kategori: {cat}" if cat else "Genel", size=11, color=ft.Colors.OUTLINE),
+                            subtitle=ft.Text(f"Collection: {cat}" if cat else "General", size=11, color=ft.Colors.OUTLINE),
                             dense=True,
                             on_click=lambda e, t=title: select_note(t),
                         )
@@ -528,14 +528,14 @@ class MarkdownEditorWidget(ft.Container):
                     notes_list.controls.append(
                         ft.ListTile(
                             leading=ft.Icon(ft.Icons.ADD_LINK, size=18, color=ft.Colors.TERTIARY),
-                            title=ft.Text(f"Yeni Not Bağlantısı Ekle: [[{query.strip()}]]", size=13, color=ft.Colors.TERTIARY),
+                            title=ft.Text(f"Add New Note Link: [[{query.strip()}]]", size=13, color=ft.Colors.TERTIARY),
                             dense=True,
                             on_click=lambda e, t=query.strip(): select_note(t),
                         )
                     )
                 else:
                     notes_list.controls.append(
-                        ft.Text("Kayıtlı not bulunamadı.", size=12, italic=True, color=ft.Colors.OUTLINE)
+                        ft.Text("No saved notes found.", size=12, italic=True, color=ft.Colors.OUTLINE)
                     )
             
             _safe_update(notes_list)
@@ -557,7 +557,7 @@ class MarkdownEditorWidget(ft.Container):
         )
 
         self.wikilink_dialog.actions = [
-            ft.TextButton("İptal", on_click=lambda e: self._close_wikilink_dialog()),
+            ft.TextButton("Cancel", on_click=lambda e: self._close_wikilink_dialog()),
         ]
 
         if self.wikilink_dialog not in pg.overlay:

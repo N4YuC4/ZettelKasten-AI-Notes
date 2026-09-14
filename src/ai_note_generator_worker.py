@@ -93,7 +93,7 @@ def _isolated_local_inference_entry(
         from local_gguf_client import LocalGgufClient
 
         HardwareChecker.configure_vulkan_environment(enable_gpu=(n_gpu_layers != 0))
-        queue.put(("progress", "Model belleğe yükleniyor..."))
+        queue.put(("progress", "Loading model into memory..."))
 
         client = LocalGgufClient(
             model_path=model_path,
@@ -101,7 +101,7 @@ def _isolated_local_inference_entry(
             n_threads=n_threads,
             text_content=text_content
         )
-        queue.put(("progress", "Model hazır. Notlar üretiliyor..."))
+        queue.put(("progress", "Model ready. Generating notes..."))
 
         def report_prog(p_msg: str):
             try:
@@ -114,7 +114,7 @@ def _isolated_local_inference_entry(
             on_progress=report_prog
         )
         if notes and len(notes) > 1:
-            report_prog("Graf bağlantıları çözümleniyor...")
+            report_prog("Analyzing graph connections...")
             notes = client.generate_note_links(notes, on_progress=report_prog)
         queue.put(("result", notes))
     except Exception as exc:
@@ -188,7 +188,7 @@ class AiNoteGeneratorWorker:
                 log_debug("DEBUG: AiNoteGeneratorWorker cancelled before start.")
                 return
 
-            self.report_progress("Metin hazırlanıyor...")
+            self.report_progress("Preparing text...")
 
             # 1. Resolve text content (extract from PDF if path provided, or use raw text)
             if isinstance(self.extracted_text_or_path, str) and (
@@ -219,13 +219,13 @@ class AiNoteGeneratorWorker:
                 model_info = local_models_catalog.get_model_by_id(active_model_id)
 
                 if not model_info:
-                    raise LocalModelNotFoundError(f"Seçili model kataloğda bulunamadı: '{active_model_id}'")
+                    raise LocalModelNotFoundError(f"Selected model not found in catalog: '{active_model_id}'")
 
                 model_path = model_downloader.ModelDownloader.get_model_path(model_info, models_dir)
                 if not model_downloader.ModelDownloader.is_model_downloaded(model_info, models_dir):
                     raise LocalModelNotFoundError(
-                        f"'{model_info.display_name}' henüz indirilmemiş. "
-                        "Lütfen Ayarlar -> Model Yöneticisi penceresinden modeli indiriniz."
+                        f"'{model_info.display_name}' has not been downloaded yet. "
+                        "Please download the model via Settings -> Model Manager."
                     )
 
                 gpu_accel = (db_manager_worker.get_setting("GPU_ACCELERATION") != "False")
@@ -235,20 +235,20 @@ class AiNoteGeneratorWorker:
                 # In test environments (pytest), run in-process so unit test mocks work as expected
                 if "PYTEST_CURRENT_TEST" in os.environ:
                     HardwareChecker.configure_vulkan_environment(enable_gpu=gpu_accel)
-                    self.report_progress("Model belleğe yükleniyor...")
+                    self.report_progress("Loading model into memory...")
                     local_client = self.create_provider("local", db_manager_worker, model_path=model_path, n_gpu_layers=n_gpu_layers)
 
                     if self._cancel_event.is_set():
                         log_debug("DEBUG: AiNoteGeneratorWorker cancelled after loading model.")
                         return
 
-                    self.report_progress("Model hazır. Notlar üretiliyor...")
+                    self.report_progress("Model ready. Generating notes...")
                     generated_notes = local_client.generate_zettelkasten_notes(
                         text_content,
                         on_progress=self.report_progress
                     )
                     if generated_notes and len(generated_notes) > 1:
-                        self.report_progress("Graf bağlantıları çözümleniyor...")
+                        self.report_progress("Analyzing graph connections...")
                         linked_notes = local_client.generate_note_links(
                             generated_notes,
                             on_progress=self.report_progress
@@ -304,16 +304,16 @@ class AiNoteGeneratorWorker:
                     if generated_notes is None:
                         if self._cancel_event.is_set():
                             return
-                        raise LocalLlmError("Lokal model not çıkarımını tamamlayamadan kapandı.")
+                        raise LocalLlmError("Local model shut down before completing note extraction.")
             else:
-                self.report_progress("Gemini ile notlar üretiliyor...")
+                self.report_progress("Generating notes with Gemini...")
                 gemini_client = self.create_provider("gemini", db_manager_worker)
                 generated_notes = gemini_client.generate_zettelkasten_notes(text_content, on_progress=self.report_progress)
                 if generated_notes and len(generated_notes) > 1:
                     if self._cancel_event.is_set():
                         log_debug("DEBUG: AiNoteGeneratorWorker cancelled before Gemini linking.")
                         return
-                    self.report_progress("Graf bağlantıları çözümleniyor...")
+                    self.report_progress("Analyzing graph connections...")
                     linked_notes = gemini_client.generate_note_links(
                         generated_notes,
                         on_progress=self.report_progress
@@ -367,7 +367,7 @@ class AiNoteGeneratorWorker:
                     title_to_id[raw_title] = new_id
 
             # 5. Stage 2: Prepare batch insertion records and connections
-            self.report_progress("Graf bağlantıları kuruluyor...")
+            self.report_progress("Establishing graph connections...")
             notes_to_insert = []
             links_to_insert = []
             now = datetime.now().isoformat()
@@ -407,7 +407,7 @@ class AiNoteGeneratorWorker:
                 return
 
             # 6. Stage 3: Atomic single-transaction database insertion
-            self.report_progress("Notlar veritabanına kaydediliyor...")
+            self.report_progress("Saving notes to database...")
             try:
                 db_manager_worker.bulk_insert_notes_and_links(notes_to_insert, links_to_insert)
                 log_debug(f"DEBUG: Atomically inserted {len(notes_to_insert)} notes and {len(links_to_insert)} links.")

@@ -252,9 +252,9 @@ def test_rename_note_with_none_or_leading_blank_lines(temp_db):
 
 
 def test_process_markdown_wikilinks_normalizes_latex():
-    raw = "Solow modeli ($Y=F(K,L)$ ve $\\frac{\\partial F}{\\partial K} > 0$). Bağlantı: [[Büyüme Modeli]]."
+    raw = "Solow model ($Y=F(K,L)$ and $\\frac{\\partial F}{\\partial K} > 0$). Link: [[Growth Model]]."
     processed = note_service.process_markdown_wikilinks(raw)
-    assert "[🔗 Büyüme Modeli](zettel://note/B%C3%BCy%C3%BCme%20Modeli)" in processed
+    assert "[🔗 Growth Model](zettel://note/Growth%20Model)" in processed
     # Formula followed by closing parenthesis should have space inserted before ')'
     assert r"$\frac{\partial F}{\partial K} > 0$ )" in processed
     # Formula followed by space should remain clean

@@ -30,8 +30,8 @@ class DialogManager:
             actions_alignment=ft.MainAxisAlignment.END
         )
         self.delete_col_dialog = ft.AlertDialog(
-            title=ft.Text("Koleksiyonu Sil"),
-            content=ft.Text("Bu koleksiyonu ve içerdiği tüm notları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz."),
+            title=ft.Text("Delete Collection"),
+            content=ft.Text("Are you sure you want to delete this collection and all its notes? This action cannot be undone."),
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
         )
@@ -59,7 +59,7 @@ class DialogManager:
         )
         self.create_linked_msg = ft.Text("")
         self.create_linked_dialog = ft.AlertDialog(
-            title=ft.Text("Yeni Not Bağlantısı"),
+            title=ft.Text("New Note Link"),
             content=self.create_linked_msg,
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
@@ -102,10 +102,10 @@ class DialogManager:
         )
 
         # 4. Progress / Loading Dialog (Persistent controls to prevent duplicate DialogRoute stacking)
-        self.loading_title = ft.Text("Yapay Zeka ile Not Üretiliyor", weight=ft.FontWeight.BOLD)
+        self.loading_title = ft.Text("Generating AI Notes", weight=ft.FontWeight.BOLD)
         self.loading_ring = ft.ProgressRing(width=28, height=28, stroke_width=3)
-        self.loading_msg = ft.Text("Metin ayıklanıyor... Lütfen bekleyiniz.", size=13)
-        self.loading_cancel_btn = ft.TextButton("İptal", visible=False)
+        self.loading_msg = ft.Text("Extracting text... Please wait.", size=13)
+        self.loading_cancel_btn = ft.TextButton("Cancel", visible=False)
         self.loading_dialog = ft.AlertDialog(
             modal=True,
             title=self.loading_title,
@@ -125,7 +125,7 @@ class DialogManager:
             border_radius=8
         )
         self.settings_dialog = ft.AlertDialog(
-            title=ft.Text("Ayarlar"),
+            title=ft.Text("Settings"),
             content=ft.Container(width=450),
             actions=[],
             actions_alignment=ft.MainAxisAlignment.END
@@ -135,7 +135,7 @@ class DialogManager:
         self.model_manager_dialog = ft.AlertDialog(
             title=ft.Row([
                 ft.Icon(ft.Icons.MEMORY, color=ft.Colors.PRIMARY),
-                ft.Text("Lokal Model Yöneticisi", weight=ft.FontWeight.BOLD),
+                ft.Text("Local Model Manager", weight=ft.FontWeight.BOLD),
             ], spacing=10),
             content=ft.Container(width=540),
             actions=[],
@@ -166,35 +166,26 @@ class DialogManager:
         dlg.open = False
 
     def _safe_open(self, dlg: ft.AlertDialog) -> None:
-        """Opens a modal dialog safely, pushing state updates to both dialog and page."""
+        """Opens a modal dialog safely, pushing state updates to the dialog."""
         dlg.open = True
         try:
             dlg.update()
         except Exception:
-            pass
-        try:
-            self.page.update()
-        except Exception:
-            pass
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
     def _safe_close(self, dlg: ft.AlertDialog) -> None:
-        """Closes a modal dialog safely, pushing state updates to both dialog and page."""
+        """Closes a modal dialog safely, pushing state updates to the dialog."""
         dlg.open = False
         try:
             dlg.update()
         except Exception:
-            pass
-        # Pop from active dialog stack if present in page._dialogs
-        try:
-            if hasattr(self.page, "_dialogs") and hasattr(self.page._dialogs, "controls"):
-                if dlg in self.page._dialogs.controls:
-                    self.page._remove_dialog(dlg)
-        except Exception:
-            pass
-        try:
-            self.page.update()
-        except Exception:
-            pass
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
     def close(self, dlg: ft.AlertDialog) -> None:
         """Closes any given modal dialog safely."""
@@ -223,11 +214,11 @@ class DialogManager:
     def show_delete_collection_confirm(self, collection_name: str, on_confirm: Callable) -> None:
         """Shows collection deletion confirmation dialog."""
         self.delete_col_dialog.content = ft.Text(
-            f"Bu koleksiyonu ('{collection_name}') ve içerdiği tüm notları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz."
+            f"Are you sure you want to delete this collection ('{collection_name}') and all its notes? This action cannot be undone."
         )
         self.delete_col_dialog.actions = [
-            ft.TextButton("İptal", on_click=lambda e: self.close(self.delete_col_dialog)),
-            ft.TextButton("Sil", on_click=lambda e: (self.close(self.delete_col_dialog), on_confirm()))
+            ft.TextButton("Cancel", on_click=lambda e: self.close(self.delete_col_dialog)),
+            ft.TextButton("Delete", on_click=lambda e: (self.close(self.delete_col_dialog), on_confirm()))
         ]
         self._safe_open(self.delete_col_dialog)
 
@@ -257,11 +248,11 @@ class DialogManager:
     def show_create_linked_note_prompt(self, target_title: str, on_create: Callable) -> None:
         """Shows prompt when clicking a WikiLink to a non-existent note."""
         self.create_linked_msg.value = (
-            f"'{target_title}' başlıklı bir not bulunamadı.\nYeni bir not olarak oluşturmak ister misiniz?"
+            f"No note titled '{target_title}' was found.\nWould you like to create it as a new note?"
         )
         self.create_linked_dialog.actions = [
-            ft.TextButton("Oluştur", on_click=lambda e: (self.close(self.create_linked_dialog), on_create())),
-            ft.TextButton("İptal", on_click=lambda e: self.close(self.create_linked_dialog))
+            ft.TextButton("Create", on_click=lambda e: (self.close(self.create_linked_dialog), on_create())),
+            ft.TextButton("Cancel", on_click=lambda e: self.close(self.create_linked_dialog))
         ]
         self._safe_open(self.create_linked_dialog)
 
@@ -324,8 +315,8 @@ class DialogManager:
 
     def show_loading(
         self,
-        title: str = "Yapay Zeka Not Çıkarma",
-        message: str = "Hazırlanıyor...",
+        title: str = "Generating AI Notes",
+        message: str = "Preparing...",
         on_cancel: Optional[Callable[[], None]] = None
     ) -> None:
         """Shows loading progress dialog with custom text and optional cancellation."""
@@ -375,7 +366,7 @@ class DialogManager:
 
         gpu_switch = ft.Switch(
             value=current_gpu_acceleration,
-            tooltip="Açıkken ekran kartını (Vulkan / CUDA) kullanarak daha hızlı çıkarım yapar. Kapatıldığında sadece işlemci (CPU) kullanılır."
+            tooltip="When enabled, uses graphics card (Vulkan / CUDA) for faster inference. When disabled, only CPU is used."
         )
 
         provider_details_container = ft.Container()
@@ -394,7 +385,7 @@ class DialogManager:
                         color=ft.Colors.GREEN_400 if accel_info["gpu_offload_supported"] else ft.Colors.AMBER_400
                     ),
                     ft.Text(
-                        f"Donanım Desteği: {accel_info['active_backend']}",
+                        f"Hardware Support: {accel_info['active_backend']}",
                         size=11,
                         color=ft.Colors.GREEN_400 if accel_info["gpu_offload_supported"] else ft.Colors.AMBER_400,
                         weight=ft.FontWeight.W_500
@@ -403,9 +394,9 @@ class DialogManager:
 
                 gpu_setting_row = ft.Row([
                     ft.Column([
-                        ft.Text("GPU Donanım Hızlandırma", weight=ft.FontWeight.W_600, size=13),
+                        ft.Text("GPU Hardware Acceleration", weight=ft.FontWeight.W_600, size=13),
                         ft.Text(
-                            "Ekran kartını kullanarak not çıkarmayı hızlandırır (Vulkan / CUDA).",
+                            "Accelerates note extraction using the graphics card (Vulkan / CUDA).",
                             size=11,
                             color=ft.Colors.ON_SURFACE_VARIANT
                         )
@@ -414,17 +405,17 @@ class DialogManager:
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
                 provider_details_container.content = ft.Column([
-                    ft.Text("Lokal GGUF Model Yapılandırması", weight=ft.FontWeight.BOLD),
-                    ft.Text("Model doğrudan cihazınızda çalışır, hiçbir veri dışarıya gönderilmez.", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.Text("Local GGUF Model Configuration", weight=ft.FontWeight.BOLD),
+                    ft.Text("Model runs directly on your device; no data is sent externally.", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
                     ft.Container(
                         content=ft.Row([
                             ft.Column([
-                                ft.Text(f"Aktif Model: {display_title}", weight=ft.FontWeight.W_600),
+                                ft.Text(f"Active Model: {display_title}", weight=ft.FontWeight.W_600),
                                 ft.Text(model_info.user_description if model_info else "", size=11, color=ft.Colors.ON_SURFACE_VARIANT),
                                 accel_badge
                             ], expand=True, spacing=2),
                             ft.Button(
-                                "Model Yöneticisi",
+                                "Model Manager",
                                 icon=ft.Icons.MEMORY,
                                 on_click=lambda e: (self.close(self.settings_dialog), on_open_model_manager())
                             )
@@ -437,8 +428,8 @@ class DialogManager:
                 ], spacing=10)
             else:
                 provider_details_container.content = ft.Column([
-                    ft.Text("Gemini API Yapılandırması", weight=ft.FontWeight.BOLD),
-                    ft.Text("API anahtarınız yerel .env dosyanızda güvenle saklanır.", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.Text("Gemini API Configuration", weight=ft.FontWeight.BOLD),
+                    ft.Text("Your API key is securely stored in your local .env file.", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
                     self.api_key_field
                 ], spacing=10)
             try:
@@ -447,11 +438,11 @@ class DialogManager:
                 pass
 
         provider_dropdown = ft.Dropdown(
-            label="Yapay Zeka Sağlayıcısı",
+            label="AI Provider",
             value=selected_provider,
             options=[
-                ft.dropdown.Option(key="gemini", text="Google Gemini (Bulut)"),
-                ft.dropdown.Option(key="local", text="Lokal GGUF Model (Cihazda / Çevrimdışı)"),
+                ft.dropdown.Option(key="gemini", text="Google Gemini (Cloud)"),
+                ft.dropdown.Option(key="local", text="Local GGUF Model (On-Device / Offline)"),
             ],
             border_radius=8,
             on_select=lambda e: update_provider_view(provider_dropdown.value or "gemini")
@@ -460,15 +451,15 @@ class DialogManager:
         update_provider_view(selected_provider)
 
         self.settings_dialog.content = ft.Column([
-            ft.Row([ft.Text("Tema Modu", weight=ft.FontWeight.BOLD), theme_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            ft.Row([ft.Text("Otomatik Kaydet", weight=ft.FontWeight.BOLD), auto_save_switch], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Row([ft.Text("Theme Mode", weight=ft.FontWeight.BOLD), theme_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Row([ft.Text("Auto Save", weight=ft.FontWeight.BOLD), auto_save_switch], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Divider(),
             provider_dropdown,
             provider_details_container
         ], tight=True, spacing=15, width=450, scroll=ft.ScrollMode.AUTO)
 
         self.settings_dialog.actions = [
-            ft.TextButton("Kaydet", on_click=lambda e: (
+            ft.TextButton("Save", on_click=lambda e: (
                 on_save_settings(
                     (self.api_key_field.value or "").strip(),
                     provider_dropdown.value or "gemini",
@@ -477,7 +468,7 @@ class DialogManager:
                 ),
                 self.close(self.settings_dialog)
             )),
-            ft.TextButton("İptal", on_click=lambda e: self.close(self.settings_dialog))
+            ft.TextButton("Cancel", on_click=lambda e: self.close(self.settings_dialog))
         ]
         self._safe_open(self.settings_dialog)
 
@@ -502,10 +493,10 @@ class DialogManager:
             refresh_models_list()
 
         unload_btn = ft.TextButton(
-            "RAM'i Temizle",
+            "Clear RAM",
             icon=ft.Icons.CLEANING_SERVICES,
             icon_color=ft.Colors.AMBER_400,
-            tooltip="Bellekteki GGUF modelini RAM/VRAM'den kaldır",
+            tooltip="Unload cached GGUF model from RAM/VRAM",
             on_click=unload_model_click,
             visible=False
         )
@@ -513,12 +504,12 @@ class DialogManager:
         accel_row = (
             ft.Row([
                 ft.Icon(ft.Icons.BOLT, size=15, color=ft.Colors.GREEN_400),
-                ft.Text(f"Donanım: {accel_info['active_backend']}", size=11, color=ft.Colors.GREEN_400, weight=ft.FontWeight.W_500)
+                ft.Text(f"Hardware: {accel_info['active_backend']}", size=11, color=ft.Colors.GREEN_400, weight=ft.FontWeight.W_500)
             ], spacing=4)
             if accel_info["gpu_offload_supported"]
             else ft.Row([
                 ft.Icon(ft.Icons.MEMORY, size=14, color=ft.Colors.ON_SURFACE_VARIANT),
-                ft.Text(f"Donanım: {accel_info['active_backend']}", size=11, color=ft.Colors.ON_SURFACE_VARIANT)
+                ft.Text(f"Hardware: {accel_info['active_backend']}", size=11, color=ft.Colors.ON_SURFACE_VARIANT)
             ], spacing=4)
         )
 
@@ -526,8 +517,8 @@ class DialogManager:
             content=ft.Row([
                 ft.Icon(ft.Icons.COMPUTER, size=24, color=ft.Colors.PRIMARY),
                 ft.Column([
-                    ft.Text(f"Sistem Belleği: Boş {mem_info['available_gb']:.1f} GB / Toplam {mem_info['total_gb']:.1f} GB", size=12, weight=ft.FontWeight.BOLD),
-                    ft.Text(f"İşlemci: {cpu_info['physical_cores']} Çekirdek (Önerilen İş Parçacığı: {cpu_info['optimal_threads']})", size=11, color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.Text(f"System Memory: Available {mem_info['available_gb']:.1f} GB / Total {mem_info['total_gb']:.1f} GB", size=12, weight=ft.FontWeight.BOLD),
+                    ft.Text(f"CPU: {cpu_info['physical_cores']} Cores (Recommended Threads: {cpu_info['optimal_threads']})", size=11, color=ft.Colors.ON_SURFACE_VARIANT),
                     accel_row
                 ], spacing=3, expand=True),
                 unload_btn
@@ -552,21 +543,21 @@ class DialogManager:
 
                 if hw_status == "OK":
                     hw_badge = ft.Container(
-                        content=ft.Text("🟢 Sistem Uyumlu", size=11, color=ft.Colors.GREEN_400, weight=ft.FontWeight.BOLD),
+                        content=ft.Text("🟢 System Compatible", size=11, color=ft.Colors.GREEN_400, weight=ft.FontWeight.BOLD),
                         bgcolor=ft.Colors.GREEN_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.GREEN_100,
                         padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                         border_radius=6
                     )
                 elif hw_status == "WARNING":
                     hw_badge = ft.Container(
-                        content=ft.Text("🟡 Sınırlı Bellek", size=11, color=ft.Colors.AMBER_400, weight=ft.FontWeight.BOLD),
+                        content=ft.Text("🟡 Low Memory", size=11, color=ft.Colors.AMBER_400, weight=ft.FontWeight.BOLD),
                         bgcolor=ft.Colors.AMBER_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.AMBER_100,
                         padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                         border_radius=6
                     )
                 else:
                     hw_badge = ft.Container(
-                        content=ft.Text("🔴 Yetersiz Bellek", size=11, color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD),
+                        content=ft.Text("🔴 Insufficient Memory", size=11, color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD),
                         bgcolor=ft.Colors.RED_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.RED_100,
                         padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                         border_radius=6
@@ -579,11 +570,11 @@ class DialogManager:
                     color=ft.Colors.PRIMARY
                 )
 
-                default_stat = f"Boyut: ~{model.size_gb:.1f} GB  |  Min. RAM: {model.min_ram_gb:.0f} GB"
+                default_stat = f"Size: ~{model.size_gb:.1f} GB  |  Min. RAM: {model.min_ram_gb:.0f} GB"
                 if is_downloading and current_status.status_text:
                     default_stat = current_status.status_text
                 elif current_status.state == "error" and current_status.error_message:
-                    default_stat = f"Hata: {current_status.error_message}"
+                    default_stat = f"Error: {current_status.error_message}"
 
                 status_text = ft.Text(
                     default_stat,
@@ -597,7 +588,7 @@ class DialogManager:
                 if is_downloading:
                     action_row.controls.append(
                         ft.TextButton(
-                            "İptal",
+                            "Cancel",
                             icon=ft.Icons.CANCEL,
                             icon_color=ft.Colors.ERROR,
                             on_click=lambda e, m=model: (
@@ -612,7 +603,7 @@ class DialogManager:
                             ft.Container(
                                 content=ft.Row([
                                     ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.PRIMARY),
-                                    ft.Text("Aktif Model", size=12, color=ft.Colors.PRIMARY, weight=ft.FontWeight.BOLD)
+                                    ft.Text("Active Model", size=12, color=ft.Colors.PRIMARY, weight=ft.FontWeight.BOLD)
                                 ], spacing=4),
                                 bgcolor=ft.Colors.PRIMARY_CONTAINER,
                                 padding=ft.Padding.symmetric(horizontal=8, vertical=4),
@@ -622,7 +613,7 @@ class DialogManager:
                     else:
                         action_row.controls.append(
                             ft.Button(
-                                "Seç",
+                                "Select",
                                 icon=ft.Icons.CHECK,
                                 on_click=lambda e, m=model: (
                                     on_select_model(m.id),
@@ -634,7 +625,7 @@ class DialogManager:
                         ft.IconButton(
                             icon=ft.Icons.DELETE_OUTLINE,
                             icon_color=ft.Colors.ERROR,
-                            tooltip="Model Dosyasını Sil",
+                            tooltip="Delete Model File",
                             on_click=lambda e, m=model: (
                                 LocalGgufClient.unload_cached_model(),
                                 ModelDownloader.delete_model(m, models_dir),
@@ -653,7 +644,7 @@ class DialogManager:
                         )
                         refresh_models_list()
 
-                    dl_btn_label = "Tekrar Dene" if current_status.state == "error" else "Modeli İndir"
+                    dl_btn_label = "Retry" if current_status.state == "error" else "Download Model"
                     action_row.controls.append(
                         ft.Button(
                             dl_btn_label,
@@ -729,7 +720,7 @@ class DialogManager:
                             elif status.state == "error":
                                 if pb.visible:
                                     pb.visible = False
-                                    st.value = f"Hata: {status.error_message or status.status_text}"
+                                    st.value = f"Error: {status.error_message or status.status_text}"
                                     st.color = ft.Colors.ERROR
                                     try:
                                         pb.update()
@@ -752,7 +743,7 @@ class DialogManager:
         ], tight=True, spacing=10, width=540)
 
         self.model_manager_dialog.actions = [
-            ft.TextButton("Kapat", on_click=close_model_manager)
+            ft.TextButton("Close", on_click=close_model_manager)
         ]
 
         self._safe_open(self.model_manager_dialog)

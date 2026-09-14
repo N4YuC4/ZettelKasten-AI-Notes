@@ -51,7 +51,7 @@ def test_check_model_compatibility_low_free_memory_allows_with_warning():
         is_safe, msg, status = HardwareChecker.check_model_compatibility(model)
         assert is_safe is True
         assert status == "WARNING"
-        assert "Düşük Boş Bellek Uyarısı" in msg
+        assert "Low Free Memory Warning" in msg
 
 
 def test_check_model_compatibility_blocked_total_ram():
@@ -61,7 +61,7 @@ def test_check_model_compatibility_blocked_total_ram():
         is_safe, msg, status = HardwareChecker.check_model_compatibility(model)
         assert is_safe is False
         assert status == "ERROR"
-        assert "engellendi" in msg.lower() or "yetersiz" in msg.lower()
+        assert "blocked" in msg.lower() or "insufficient" in msg.lower()
 
 
 def test_check_file_compatibility_nonexistent():
@@ -86,7 +86,7 @@ def test_check_disk_space_insufficient(tmp_path):
         has_space, msg, free_gb = HardwareChecker.check_disk_space(str(tmp_path), 5 * (1024 ** 3))
         assert has_space is False
         assert free_gb == 1.0
-        assert "Yetersiz Disk Alanı" in msg
+        assert "Insufficient Disk Space" in msg
 
 
 def test_detect_gpu_devices():

@@ -162,3 +162,29 @@ def test_controller_guard_unsaved_changes_auto_save_false(test_setup):
     controller.guard_unsaved_changes(target_action)
     assert action_called is False
     dialog_manager.show_unsaved_changes_prompt.assert_called_once()
+
+
+def test_controller_handle_ai_finished_flow(test_setup):
+    controller, db, note_service, state, dialog_manager = test_setup
+
+    with patch("time.sleep") as mock_sleep, patch.object(controller, "show_snack_bar") as mock_snack:
+        controller.handle_ai_finished([{"title": "Note 1"}])
+        dialog_manager.hide_loading.assert_called_once()
+        mock_sleep.assert_called_with(0.35)
+        mock_snack.assert_called_once_with("1 notes successfully generated and saved!")
+
+
+def test_controller_cancel_worker_flow(test_setup):
+    controller, db, note_service, state, dialog_manager = test_setup
+
+    mock_worker = MagicMock()
+    controller.active_worker = mock_worker
+
+    with patch("time.sleep") as mock_sleep, patch.object(controller, "show_snack_bar") as mock_snack:
+        controller.cancel_worker()
+        mock_worker.cancel.assert_called_once()
+        assert controller.active_worker is None
+        dialog_manager.hide_loading.assert_called_once()
+        mock_sleep.assert_called_with(0.35)
+        mock_snack.assert_called_once()
+

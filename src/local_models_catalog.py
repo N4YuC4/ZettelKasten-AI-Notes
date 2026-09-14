@@ -38,8 +38,8 @@ CURATED_MODELS: Dict[str, LocalModelInfo] = {
     "gemma-4-e2b": LocalModelInfo(
         id="gemma-4-e2b",
         display_name="Gemma 4 (E2B)",
-        user_description="Hafif & Ultra Hızlı — 128K Doğal Bağlam, tüm bilgisayarlar için ideal",
-        tier_label="Hafif",
+        user_description="Lightweight & Ultra Fast — 128K native context, ideal for all computers",
+        tier_label="Lightweight",
         repo_id="mradermacher/Huihui-gemma-4-E2B-it-abliterated-i1-GGUF",
         filename="Huihui-gemma-4-E2B-it-abliterated.i1-Q4_K_M.gguf",
         size_bytes=3_427_874_560,
@@ -50,8 +50,8 @@ CURATED_MODELS: Dict[str, LocalModelInfo] = {
     "gemma-4-12b": LocalModelInfo(
         id="gemma-4-12b",
         display_name="Gemma 4 (12B)",
-        user_description="Dengeli & Derin Zeka — Karmaşık tezler ve çok katmanlı kavramsal analiz",
-        tier_label="Dengeli",
+        user_description="Balanced & Deep Intelligence — Complex theses and multi-layered conceptual analysis",
+        tier_label="Balanced",
         repo_id="mradermacher/Huihui-gemma-4-12B-it-abliterated-GGUF",
         filename="Huihui-gemma-4-12B-it-abliterated.IQ4_XS.gguf",
         size_bytes=6_690_000_000,
@@ -62,8 +62,8 @@ CURATED_MODELS: Dict[str, LocalModelInfo] = {
     "gemma-4-26b-moe": LocalModelInfo(
         id="gemma-4-26b-moe",
         display_name="Gemma 4 (26B MoE)",
-        user_description="Yüksek Kapasite — 26B Amiral gemisi uzman karması mimarisi",
-        tier_label="Yüksek Kapasite",
+        user_description="High Capacity — 26B flagship mixture-of-experts architecture",
+        tier_label="High Capacity",
         repo_id="mradermacher/gemma-4-26B-A4B-it-abliterated-GGUF",
         filename="gemma-4-26B-A4B-it-abliterated.IQ4_XS.gguf",
         size_bytes=14_060_000_000,

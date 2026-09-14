@@ -133,7 +133,7 @@ class GeminiApiClient(BaseAiProvider):
 
         log_debug(f"Starting Stage 2: Gemini Global Knowledge Graph Linking for {len(notes)} notes...")
         if on_progress:
-            on_progress("Notlar arası kavramsal bağlantılar çözümleniyor...")
+            on_progress("Analyzing conceptual links between notes...")
 
         # Prepare numbered notes export for prompt input
         full_notes_payload = [

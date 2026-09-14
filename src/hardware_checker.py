@@ -110,7 +110,7 @@ class HardwareChecker:
             except Exception:
                 pass
 
-        return gpus or ["Standart / Tümleşik Grafik"]
+        return gpus or ["Standard / Integrated Graphics"]
 
     _cached_acceleration_info: Optional[Dict[str, Any]] = None
     _cached_optimal_vulkan_device: Optional[int] = None
@@ -269,24 +269,24 @@ class HardwareChecker:
                 if has_vk or has_cuda or has_metal or has_hip or has_sycl:
                     gpu_offload_supported = True
                     if has_vk:
-                        active_backend = "Vulkan (Evrensel GPU Hızlandırmalı)"
+                        active_backend = "Vulkan (Universal GPU Accelerated)"
                     elif has_cuda:
-                        active_backend = "CUDA (NVIDIA GPU Hızlandırmalı)"
+                        active_backend = "CUDA (NVIDIA GPU Accelerated)"
                     elif has_metal:
-                        active_backend = "Metal (Apple Silicon Hızlandırmalı)"
+                        active_backend = "Metal (Apple Silicon Accelerated)"
                     elif has_hip:
-                        active_backend = "ROCm / HIP (AMD GPU Hızlandırmalı)"
+                        active_backend = "ROCm / HIP (AMD GPU Accelerated)"
                     elif has_sycl:
-                        active_backend = "SYCL (Intel GPU Hızlandırmalı)"
+                        active_backend = "SYCL (Intel GPU Accelerated)"
                     else:
-                        active_backend = "GPU Hızlandırmalı"
+                        active_backend = "GPU Accelerated"
             
             if not gpu_offload_supported:
                 cpu_info = HardwareChecker.get_cpu_info()
-                active_backend = f"CPU (Standart - {cpu_info['optimal_threads']} İş Parçacığı)"
+                active_backend = f"CPU (Standard - {cpu_info['optimal_threads']} Threads)"
         except Exception:
             gpu_offload_supported = False
-            active_backend = "CPU (Standart)"
+            active_backend = "CPU (Standard)"
 
         info = {
             "gpu_offload_supported": gpu_offload_supported,
@@ -315,31 +315,31 @@ class HardwareChecker:
         # Only block if total physical RAM is strictly lower than minimum required RAM
         if total_gb < model.min_ram_gb:
             msg = (
-                f"Yetersiz Donanım! Bu model en az {model.min_ram_gb:.0f} GB RAM gerektirir. "
-                f"Sisteminizde toplam {total_gb:.1f} GB RAM bulunmaktadır. "
-                "Bilgisayarınızın kilitlenmemesi için bu model engellendi."
+                f"Insufficient Hardware! This model requires at least {model.min_ram_gb:.0f} GB RAM. "
+                f"Your system has {total_gb:.1f} GB RAM total. "
+                "This model was blocked to prevent system freeze."
             )
             return False, msg, "ERROR"
 
         # If available RAM is lower than min RAM, give warning but allow execution
         if available_gb < model.min_ram_gb:
             msg = (
-                f"Düşük Boş Bellek Uyarısı: Model için ~{model.min_ram_gb:.0f} GB boş RAM önerilir, "
-                f"şu an {available_gb:.1f} GB boş RAM var (Toplam RAM: {total_gb:.1f} GB). "
-                "Model yüklenirken işletim sistemi takas (swap) belleği kullanabilir."
+                f"Low Free Memory Warning: Recommended free RAM for model is ~{model.min_ram_gb:.0f} GB, "
+                f"currently {available_gb:.1f} GB free (Total RAM: {total_gb:.1f} GB). "
+                "Operating system may use swap memory while loading model."
             )
             return True, msg, "WARNING"
 
         # If available RAM is between minimum and recommended
         if available_gb < model.recommended_ram_gb:
             msg = (
-                f"Uygun (Önerilen Boş Bellek: {model.recommended_ram_gb:.0f} GB, "
-                f"Şu an Boş: {available_gb:.1f} GB / Toplam: {total_gb:.1f} GB)."
+                f"Compatible (Recommended Free RAM: {model.recommended_ram_gb:.0f} GB, "
+                f"Currently Free: {available_gb:.1f} GB / Total: {total_gb:.1f} GB)."
             )
             return True, msg, "WARNING"
 
         # Fully compatible
-        msg = f"Sistem tamamen uyumlu. (Toplam: {total_gb:.1f} GB, Boş: {available_gb:.1f} GB)"
+        msg = f"System fully compatible. (Total: {total_gb:.1f} GB, Free: {available_gb:.1f} GB)"
         return True, msg, "OK"
 
     @staticmethod
@@ -349,7 +349,7 @@ class HardwareChecker:
         Blocking is based on TOTAL RAM. Low available RAM produces a WARNING.
         """
         if not os.path.exists(file_path):
-            return False, "Model dosyası diskte bulunamadı.", "ERROR"
+            return False, "Model file not found on disk.", "ERROR"
 
         size_bytes = os.path.getsize(file_path)
         size_gb = size_bytes / (1024 ** 3)
@@ -362,20 +362,20 @@ class HardwareChecker:
 
         if total_gb < min_ram_gb:
             return False, (
-                f"Yetersiz Donanım! Bu dosya (~{size_gb:.1f} GB) için en az {min_ram_gb:.1f} GB toplam RAM gereklidir. "
-                f"Sistemdeki toplam RAM: {total_gb:.1f} GB."
+                f"Insufficient Hardware! This file (~{size_gb:.1f} GB) requires at least {min_ram_gb:.1f} GB total RAM. "
+                f"Total RAM in system: {total_gb:.1f} GB."
             ), "ERROR"
 
         if available_gb < min_ram_gb:
             return True, (
-                f"Düşük Boş Bellek Uyarısı: Gerekli ~{min_ram_gb:.1f} GB, mevcut boş RAM {available_gb:.1f} GB "
-                f"(Toplam: {total_gb:.1f} GB)."
+                f"Low Free Memory Warning: Required ~{min_ram_gb:.1f} GB, currently free RAM {available_gb:.1f} GB "
+                f"(Total: {total_gb:.1f} GB)."
             ), "WARNING"
 
         if available_gb < rec_ram_gb:
-            return True, f"Uygun. (Boş RAM: {available_gb:.1f} GB / Toplam: {total_gb:.1f} GB)", "WARNING"
+            return True, f"Compatible. (Free RAM: {available_gb:.1f} GB / Total: {total_gb:.1f} GB)", "WARNING"
 
-        return True, f"Sistem uyumlu. (Boş RAM: {available_gb:.1f} GB / Toplam: {total_gb:.1f} GB)", "OK"
+        return True, f"System compatible. (Free RAM: {available_gb:.1f} GB / Total: {total_gb:.1f} GB)", "OK"
 
     @staticmethod
     def check_disk_space(target_dir: str, required_bytes: int) -> Tuple[bool, str, float]:
@@ -396,15 +396,15 @@ class HardwareChecker:
 
             if free_bytes < safe_required:
                 msg = (
-                    f"Yetersiz Disk Alanı! Bu model için diskte en az ~{req_gb:.1f} GB boş alan gereklidir. "
-                    f"Seçili sürücüde yalnızca {free_gb:.1f} GB boş yer var."
+                    f"Insufficient Disk Space! This model requires at least ~{req_gb:.1f} GB free space on disk. "
+                    f"Selected drive only has {free_gb:.1f} GB free."
                 )
                 return False, msg, free_gb
 
-            return True, f"Disk alanı yeterli ({free_gb:.1f} GB boş).", free_gb
+            return True, f"Disk space sufficient ({free_gb:.1f} GB free).", free_gb
         except Exception as e:
             log_error(f"Error checking disk space: {e}")
-            return True, "Disk alanı denetlenemedi, indirmeye izin veriliyor.", 0.0
+            return True, "Disk space could not be checked, allowing download.", 0.0
 
     @staticmethod
     def get_device_performance_profile() -> str:

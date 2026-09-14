@@ -292,33 +292,33 @@ def test_worker_gemini_typed_errors(monkeypatch):
 def test_resolve_target_id_strict_matching():
     from ai_note_generator_worker import _resolve_target_id
     batch_map = {
-        "Binaural Vuruşlar": "id-1",
-        "Transkraniyal Manyetik Stimülasyon (TMS)": "id-2",
-        "İ-Dozlar": "id-3",
+        "Binaural Beats": "id-1",
+        "Transcranial Magnetic Stimulation (TMS)": "id-2",
+        "I-Dosers": "id-3",
     }
     global_map = {
-        "Plasebo Etkisi": "id-4",
+        "Placebo Effect": "id-4",
     }
 
     # 1. Verbatim exact matches
-    assert _resolve_target_id("Binaural Vuruşlar", batch_map, global_map) == "id-1"
-    assert _resolve_target_id("Plasebo Etkisi", batch_map, global_map) == "id-4"
+    assert _resolve_target_id("Binaural Beats", batch_map, global_map) == "id-1"
+    assert _resolve_target_id("Placebo Effect", batch_map, global_map) == "id-4"
 
     # 2. Markdown header sanitized exact matches
-    assert _resolve_target_id("# Binaural Vuruşlar", batch_map, global_map) == "id-1"
-    assert _resolve_target_id("## Plasebo Etkisi  ", batch_map, global_map) == "id-4"
+    assert _resolve_target_id("# Binaural Beats", batch_map, global_map) == "id-1"
+    assert _resolve_target_id("## Placebo Effect  ", batch_map, global_map) == "id-4"
 
     # 3. Case-folded exact match
-    assert _resolve_target_id("binaural vuruşlar", batch_map, global_map) == "id-1"
+    assert _resolve_target_id("binaural beats", batch_map, global_map) == "id-1"
 
     # 4. Strict rejection of substrings / prefixes / partial fuzzy matches to avoid false graph links
-    # 'Binaural' is only part of 'Binaural Vuruşlar' -> must return None
+    # 'Binaural' is only part of 'Binaural Beats' -> must return None
     assert _resolve_target_id("Binaural", batch_map, global_map) is None
-    # 'Transkraniyal Manyetik Stimülasyon' missing '(TMS)' -> must return None
-    assert _resolve_target_id("Transkraniyal Manyetik Stimülasyon", batch_map, global_map) is None
+    # 'Transcranial Magnetic Stimulation' missing '(TMS)' -> must return None
+    assert _resolve_target_id("Transcranial Magnetic Stimulation", batch_map, global_map) is None
     # Dissimilar or unknown target returns None
-    assert _resolve_target_id("Doğrudan Beyin Stimülasyonu", batch_map, global_map) is None
-    assert _resolve_target_id("Tamamen Alakasız Konu", batch_map, global_map) is None
+    assert _resolve_target_id("Direct Brain Stimulation", batch_map, global_map) is None
+    assert _resolve_target_id("Completely Unrelated Topic", batch_map, global_map) is None
 
 
 def test_worker_unloads_cached_model_on_finish(temp_db, monkeypatch):
@@ -395,7 +395,7 @@ def test_worker_reports_progress(temp_db, monkeypatch):
     )
     worker.run()
     assert len(progress_log) > 0
-    assert any("Metin" in p for p in progress_log)
+    assert any("text" in p.lower() for p in progress_log)
 
 
 def test_worker_cancel_before_run(temp_db):
@@ -436,7 +436,7 @@ def test_worker_gemini_calls_generate_note_links(temp_db, monkeypatch):
 
     mock_gemini_client.generate_zettelkasten_notes.assert_called_once()
     mock_gemini_client.generate_note_links.assert_called_once()
-    assert any("Graf bağlantıları çözümleniyor" in m for m in progress_messages)
+    assert any("Analyzing graph connections" in m for m in progress_messages)
 
 
 

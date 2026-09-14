@@ -151,31 +151,31 @@ def main(page: ft.Page):
             ft.IconButton(
                 icon=ft.Icons.NOTE_ADD_OUTLINED,
                 icon_color=ft.Colors.PRIMARY,
-                tooltip="Yeni Not (Ctrl+N)",
+                tooltip="New Note (Ctrl+N)",
                 on_click=lambda e: controller.guard_unsaved_changes(controller.new_note_internal)
             ),
             ft.IconButton(
                 icon=ft.Icons.SAVE_OUTLINED,
                 icon_color=ft.Colors.SECONDARY,
-                tooltip="Notu Kaydet (Ctrl+S)",
+                tooltip="Save Note (Ctrl+S)",
                 on_click=lambda e: controller.save_current_note()
             ),
             ft.IconButton(
                 icon=ft.Icons.DELETE_OUTLINE,
                 icon_color=ft.Colors.ERROR,
-                tooltip="Notu Sil",
+                tooltip="Delete Note",
                 on_click=lambda e: controller.handle_delete_current_note()
             ),
             ft.IconButton(
                 icon=ft.Icons.LINK,
                 icon_color=ft.Colors.TERTIARY,
-                tooltip="Not Bağla (Ctrl+K)",
+                tooltip="Link Note (Ctrl+K)",
                 on_click=lambda e: controller.handle_link_picker_open()
             ),
             ft.IconButton(
                 icon=ft.Icons.AUTO_AWESOME,
                 icon_color=ft.Colors.AMBER_400,
-                tooltip="PDF'ten AI Notları Üret",
+                tooltip="Generate AI Notes from PDF",
                 on_click=lambda e: page.run_task(controller.trigger_pdf_generation)
             ),
             ft.Container(width=8),

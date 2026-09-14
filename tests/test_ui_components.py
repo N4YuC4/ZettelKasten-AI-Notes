@@ -303,12 +303,12 @@ def test_dialog_manager_loading_dialog_lifecycle():
     # Show loading
     cancelled = []
     dm.show_loading(
-        title="PDF Analiz Ediliyor",
-        message="Metin çıkarılıyor...",
+        title="Analyzing PDF",
+        message="Extracting text...",
         on_cancel=lambda: cancelled.append(True)
     )
     assert dm.loading_dialog.open is True
-    assert dm.loading_msg.value == "Metin çıkarılıyor..."
+    assert dm.loading_msg.value == "Extracting text..."
     assert len(dm.loading_dialog.actions) == 1
 
     # Trigger cancel button
@@ -317,8 +317,8 @@ def test_dialog_manager_loading_dialog_lifecycle():
     assert cancelled == [True]
 
     # Update loading message
-    dm.update_loading_message("Notlar veritabanına kaydediliyor...")
-    assert dm.loading_msg.value == "Notlar veritabanına kaydediliyor..."
+    dm.update_loading_message("Saving notes to database...")
+    assert dm.loading_msg.value == "Saving notes to database..."
 
     # Hide loading cleanly
     dm.hide_loading()

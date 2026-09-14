@@ -114,9 +114,9 @@ def test_format_eta():
     from model_downloader import format_eta
     assert format_eta(None) == ""
     assert format_eta(0) == ""
-    assert format_eta(45) == " • Kalan: 45 sn"
-    assert format_eta(125) == " • Kalan: 2 dk 5 sn"
-    assert format_eta(3665) == " • Kalan: 1 sa 1 dk"
+    assert format_eta(45) == " • Remaining: 45s"
+    assert format_eta(125) == " • Remaining: 2m 5s"
+    assert format_eta(3665) == " • Remaining: 1h 1m"
 
 
 def test_status_registry_and_listeners():
@@ -139,7 +139,7 @@ def test_download_insufficient_disk_space(tmp_path):
     model = catalog.get_model_by_id("gemma-4-e2b")
     error_called = []
 
-    with patch.object(HardwareChecker, "check_disk_space", return_value=(False, "Yetersiz Disk Alanı!", 0.5)):
+    with patch.object(HardwareChecker, "check_disk_space", return_value=(False, "Insufficient Disk Space!", 0.5)):
         ModelDownloader.start_download(
             model=model,
             models_dir=str(tmp_path),
@@ -147,7 +147,7 @@ def test_download_insufficient_disk_space(tmp_path):
         )
 
     assert len(error_called) == 1
-    assert "Yetersiz Disk Alanı" in error_called[0]
+    assert "Insufficient Disk Space" in error_called[0]
     status = ModelDownloader.get_status(model.id)
     assert status.state == "error"
 
@@ -209,7 +209,7 @@ def test_download_retry_counter_resets_on_successful_data_transfer(tmp_path):
     assert os.path.getsize(finished_path[0]) == 2048
 
     # Verify that when midway failure occurred after streaming data, retry_count reset and became 1, not 3!
-    retry_statuses = [text for state, count, text in observed_retry_counts if "Bağlantı koptu" in text]
+    retry_statuses = [text for state, count, text in observed_retry_counts if "Connection dropped" in text]
     assert len(retry_statuses) >= 3
     # First failure -> (1/30)
     assert "(1/30)" in retry_statuses[0]
