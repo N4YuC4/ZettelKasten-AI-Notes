@@ -60,18 +60,31 @@ def build_note_extraction_prompt(
     chunk_text: str,
     previous_notes_json: Optional[str] = None,
     existing_titles: Optional[List[str]] = None,
-    unified_general_title: Optional[str] = None
+    unified_general_title: Optional[str] = None,
+    custom_system_prompt: Optional[str] = None,
 ) -> str:
     """
     Builds standard Zettelkasten extraction prompt used across all AI providers.
     Enforces unified JSON schema with 'general_title', 'conceptual_analysis', and 'notes',
     instructing models to deliberate conceptually before generating atomic notes.
+    Accepts optional custom_system_prompt with strict core rule precedence.
     """
     chained_context_block = build_chained_context_block(
         previous_notes_json=previous_notes_json,
         existing_titles=existing_titles,
         unified_general_title=unified_general_title
     )
+
+    custom_instructions_block = ""
+    if custom_system_prompt and custom_system_prompt.strip():
+        custom_instructions_block = f"""
+4. USER CUSTOM INSTRUCTIONS & PRECEDENCE:
+USER-DEFINED INSTRUCTIONS:
+{custom_system_prompt.strip()}
+
+PRECEDENCE & CONFLICT RESOLUTION RULE:
+The core system rules above (valid JSON schema, strict language matching, and atomic note isolation) are mandatory, foundational, and inviolable. If any user-defined instruction conflicts with or contradicts these core system rules, the core system rules MUST strictly prevail and the conflicting user instruction must be disregarded.
+"""
 
     collection_rule = (
         f'- \'general_title\': Set strictly to "{unified_general_title}".'
@@ -138,7 +151,7 @@ JSON FORMAT:
     }}
   ]
 }}
-
+{custom_instructions_block}
 Text to process:
 <document_content>
 {chunk_text}

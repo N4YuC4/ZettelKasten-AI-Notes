@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional, List, Tuple, Set, Dict, Any
 from logger import log_error, log_debug
 from models import Note, NoteMetadata, NoteLink
+from settings_manager import SettingsManager
 
 # Default path to the database file in the 'db' directory
 DATABASE_FILE = os.path.join("db", "notes.db")
@@ -18,13 +19,23 @@ DATABASE_FILE = os.path.join("db", "notes.db")
 class DatabaseManager:
     """
     Manages SQLite database operations with thread-local connections.
+    Settings are delegated to the dedicated SettingsManager (db/settings.db).
     """
-    def __init__(self, db_path: Optional[str] = None, init_tables: bool = True):
+    def __init__(self, db_path: Optional[str] = None, init_tables: bool = True, settings_manager: Optional[SettingsManager] = None):
         self.db_path = db_path if db_path is not None else DATABASE_FILE
         dir_name = os.path.dirname(self.db_path)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
         self._local = threading.local()
+        if settings_manager is not None:
+            self.settings_manager = settings_manager
+        else:
+            default_notes_path = os.path.abspath(os.path.join("db", "notes.db"))
+            if os.path.abspath(self.db_path) != default_notes_path:
+                base, ext = os.path.splitext(self.db_path)
+                self.settings_manager = SettingsManager(db_path=f"{base}_settings{ext}")
+            else:
+                self.settings_manager = SettingsManager.get_instance()
         if init_tables:
             self.ensure_schema()
 
@@ -112,18 +123,17 @@ class DatabaseManager:
                 )
             """)
 
-    def get_setting(self, key: str) -> Optional[str]:
-        """Retrieves a configuration value by key."""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        result = cursor.fetchone()
-        return result[0] if result else None
+    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Retrieves a configuration value from the dedicated settings database."""
+        return self.settings_manager.get_setting(key, default)
 
     def set_setting(self, key: str, value: str) -> None:
-        """Sets or replaces a configuration value."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        """Sets or replaces a configuration value in the dedicated settings database."""
+        self.settings_manager.set_setting(key, value)
+
+    def reset_settings_to_defaults(self) -> None:
+        """Resets the settings database to factory defaults."""
+        self.settings_manager.reset_to_defaults()
 
     def create_notes_table(self) -> None:
         """Creates the notes table and collection index."""
@@ -405,7 +415,9 @@ class DatabaseManager:
             raise e
 
     def close_connection(self) -> None:
-        """Closes thread-local database connection."""
+        """Closes thread-local database connection and settings connection."""
         if hasattr(self._local, 'conn') and self._local.conn is not None:
             self._local.conn.close()
             self._local.conn = None
+        if hasattr(self, 'settings_manager') and self.settings_manager is not None:
+            self.settings_manager.close_connection()

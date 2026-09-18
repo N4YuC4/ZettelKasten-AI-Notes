@@ -81,7 +81,8 @@ def _isolated_local_inference_entry(
     model_path: str,
     text_content: str,
     n_gpu_layers: int,
-    n_threads: Optional[int] = None
+    n_threads: Optional[int] = None,
+    custom_system_prompt: Optional[str] = None
 ) -> None:
     """
     Executes local GGUF model loading and inference in a completely isolated process.
@@ -111,7 +112,8 @@ def _isolated_local_inference_entry(
 
         notes = client.generate_zettelkasten_notes(
             text_content,
-            on_progress=report_prog
+            on_progress=report_prog,
+            custom_system_prompt=custom_system_prompt
         )
         if notes and len(notes) > 1:
             report_prog("Analyzing graph connections...")
@@ -169,7 +171,8 @@ class AiNoteGeneratorWorker:
         provider_type: str,
         db_manager: Optional[Any] = None,
         model_path: Optional[str] = None,
-        n_gpu_layers: int = -1
+        n_gpu_layers: int = -1,
+        **kwargs
     ) -> BaseAiProvider:
         """
         Instantiates the appropriate BaseAiProvider implementation.
@@ -177,7 +180,12 @@ class AiNoteGeneratorWorker:
         if provider_type == "local":
             return LocalGgufClient(model_path, n_gpu_layers=n_gpu_layers)
         else:
-            return GeminiApiClient()
+            api_key = kwargs.get("api_key") or (db_manager.get_setting("GEMINI_API_KEY") if db_manager else None)
+            try:
+                return GeminiApiClient(api_key=api_key, db_manager=db_manager)
+            except TypeError:
+                # Support 0-argument test mocks (e.g. lambda: mock_client)
+                return GeminiApiClient()
 
     def run(self) -> None:
         """Main execution method for the background worker thread."""
@@ -208,6 +216,7 @@ class AiNoteGeneratorWorker:
 
             # 2. Initialize thread-local DatabaseManager
             db_manager_worker = database_manager.DatabaseManager(init_tables=True)
+            custom_prompt = db_manager_worker.get_setting("AI_CUSTOM_SYSTEM_PROMPT")
 
             # 3. Determine AI Provider and generate notes
             ai_provider = (db_manager_worker.get_setting("AI_PROVIDER") or "gemini").lower()
@@ -245,7 +254,8 @@ class AiNoteGeneratorWorker:
                     self.report_progress("Model ready. Generating notes...")
                     generated_notes = local_client.generate_zettelkasten_notes(
                         text_content,
-                        on_progress=self.report_progress
+                        on_progress=self.report_progress,
+                        custom_system_prompt=custom_prompt
                     )
                     if generated_notes and len(generated_notes) > 1:
                         self.report_progress("Analyzing graph connections...")
@@ -263,7 +273,7 @@ class AiNoteGeneratorWorker:
                     queue = ctx.Queue()
                     proc = ctx.Process(
                         target=_isolated_local_inference_entry,
-                        args=(queue, model_path, text_content, n_gpu_layers)
+                        args=(queue, model_path, text_content, n_gpu_layers, None, custom_prompt)
                     )
                     self._active_process = proc
                     proc.start()
@@ -308,7 +318,11 @@ class AiNoteGeneratorWorker:
             else:
                 self.report_progress("Generating notes with Gemini...")
                 gemini_client = self.create_provider("gemini", db_manager_worker)
-                generated_notes = gemini_client.generate_zettelkasten_notes(text_content, on_progress=self.report_progress)
+                generated_notes = gemini_client.generate_zettelkasten_notes(
+                    text_content,
+                    on_progress=self.report_progress,
+                    custom_system_prompt=custom_prompt
+                )
                 if generated_notes and len(generated_notes) > 1:
                     if self._cancel_event.is_set():
                         log_debug("DEBUG: AiNoteGeneratorWorker cancelled before Gemini linking.")

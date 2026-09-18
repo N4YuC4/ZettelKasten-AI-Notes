@@ -9,7 +9,6 @@ import asyncio
 import time
 import traceback
 from typing import Optional, Any
-from dotenv import set_key
 
 import flet as ft
 from logger import log_debug, log_error
@@ -417,16 +416,20 @@ class AppController:
     handle_create_category = handle_create_collection
 
     def handle_delete_collection_click(self):
-        """Prompts confirmation for deleting active collection."""
+        """Prompts confirmation or directly deletes active collection based on setting."""
         selected_col = self.state.selected_collection_filter
         if not selected_col or selected_col == "All Notes":
             self.show_snack_bar("Please select a valid collection to delete.", color=ft.Colors.ERROR)
             return
 
-        self.dialog_manager.show_delete_collection_confirm(
-            collection_name=selected_col,
-            on_confirm=lambda: self.handle_delete_collection_confirmed(selected_col)
-        )
+        confirm_needed = self.db_manager.get_setting("CONFIRM_DELETE_COLLECTION") != "False"
+        if confirm_needed:
+            self.dialog_manager.show_delete_collection_confirm(
+                collection_name=selected_col,
+                on_confirm=lambda: self.handle_delete_collection_confirmed(selected_col)
+            )
+        else:
+            self.handle_delete_collection_confirmed(selected_col)
 
     # Backward compatibility alias
     handle_delete_category_click = handle_delete_collection_click
@@ -494,15 +497,23 @@ class AppController:
         else:
             self.show_snack_bar("Failed to delete note.", color=ft.Colors.ERROR)
 
+    def confirm_or_delete_note(self, note_id: str, note_title: str):
+        """Prompts confirmation or directly deletes note based on CONFIRM_DELETE_NOTE setting."""
+        confirm_needed = self.db_manager.get_setting("CONFIRM_DELETE_NOTE") != "False"
+        if confirm_needed:
+            self.dialog_manager.show_delete_note_confirm(
+                note_title=note_title,
+                on_confirm=lambda: self.handle_delete_note(note_id, note_title)
+            )
+        else:
+            self.handle_delete_note(note_id, note_title)
+
     def handle_delete_current_note(self):
-        """Prompts confirmation to delete currently active note."""
+        """Prompts confirmation or directly deletes currently active note."""
         if not self.state.current_note_id:
             self.show_snack_bar("Please select or save a note first to delete.", color=ft.Colors.ERROR)
             return
-        self.dialog_manager.show_delete_note_confirm(
-            note_title=self.state.current_note_title,
-            on_confirm=lambda: self.handle_delete_note(self.state.current_note_id, self.state.current_note_title)
-        )
+        self.confirm_or_delete_note(self.state.current_note_id, self.state.current_note_title)
 
     def handle_link_picker_open(self):
         """Opens link picker dialog for current note."""
@@ -538,29 +549,53 @@ class AppController:
         else:
             self.show_snack_bar(f"Failed to unlink note: {target_title}.", color=ft.Colors.ERROR)
 
-    def handle_save_settings(self, api_key: str, ai_provider: str, active_model_id: str, gpu_acceleration: bool = True):
-        """Persists user configuration for AI models, keys, and GPU acceleration."""
+    def handle_save_settings(
+        self,
+        api_key: str = "",
+        ai_provider: str = "gemini",
+        active_model_id: str = local_models_catalog.DEFAULT_MODEL_ID,
+        gpu_acceleration: bool = True,
+        models_dir: str = "",
+        custom_prompt: str = "",
+        confirm_delete_note: bool = True,
+        confirm_delete_collection: bool = True,
+        custom_db_path: str = "",
+    ):
+        """Persists all user configuration directly to dedicated settings database."""
         cleaned_key = (api_key or "").strip()
-        dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
-        if cleaned_key:
-            os.environ["GEMINI_API_KEY"] = cleaned_key
-            set_key(dotenv_path, "GEMINI_API_KEY", cleaned_key)
-        else:
-            os.environ.pop("GEMINI_API_KEY", None)
-            if os.path.exists(dotenv_path):
-                from dotenv import unset_key
-                try:
-                    unset_key(dotenv_path, "GEMINI_API_KEY")
-                except Exception:
-                    pass
-
+        self.db_manager.set_setting("GEMINI_API_KEY", cleaned_key)
         self.db_manager.set_setting("AI_PROVIDER", ai_provider)
         self.db_manager.set_setting("ACTIVE_LOCAL_MODEL", active_model_id)
         self.db_manager.set_setting("GPU_ACCELERATION", "True" if gpu_acceleration else "False")
+        if models_dir:
+            self.db_manager.set_setting("MODELS_DIR", models_dir.strip())
+        self.db_manager.set_setting("AI_CUSTOM_SYSTEM_PROMPT", (custom_prompt or "").strip())
+        self.db_manager.set_setting("CONFIRM_DELETE_NOTE", "True" if confirm_delete_note else "False")
+        self.db_manager.set_setting("CONFIRM_DELETE_COLLECTION", "True" if confirm_delete_collection else "False")
+        if custom_db_path:
+            self.db_manager.set_setting("CUSTOM_DB_PATH", custom_db_path.strip())
 
         prov_title = "Google Gemini" if ai_provider == "gemini" else "Local GGUF"
         gpu_status = "Enabled" if gpu_acceleration else "Disabled"
-        self.show_snack_bar(f"Settings saved. (Provider: {prov_title}, GPU: {gpu_status})")
+        self.show_snack_bar(f"Settings saved to database. (Provider: {prov_title}, GPU: {gpu_status})")
+
+    def handle_reset_settings(self):
+        """Resets all configuration settings to factory defaults in settings database."""
+        self.db_manager.reset_settings_to_defaults()
+        theme_val = self.db_manager.get_setting("UI_THEME", "Dark")
+        self.state.set_theme_mode(theme_val)
+        self.page.theme_mode = ft.ThemeMode.DARK if theme_val == "Dark" else ft.ThemeMode.LIGHT
+        if self.theme_btn:
+            self.theme_btn.icon = ft.Icons.LIGHT_MODE if theme_val == "Dark" else ft.Icons.DARK_MODE
+        auto_save = self.db_manager.get_setting("AUTO_SAVE", "True") != "False"
+        self.state.set_auto_save(auto_save)
+        if self.auto_save_switch:
+            self.auto_save_switch.value = auto_save
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        self.show_snack_bar("Settings reset to factory defaults.")
 
     def handle_open_model_manager(self):
         """Opens modal model manager dialog."""
@@ -576,6 +611,12 @@ class AppController:
             on_model_deleted=lambda mid: self.show_snack_bar("Model file deleted.")
         )
 
+    def handle_setting_change(self, key: str, value: Any):
+        """Immediately persists configuration change to settings database without blocking UI."""
+        str_val = str(value) if value is not None else ""
+        self.db_manager.set_setting(key, str_val)
+        log_debug(f"Setting '{key}' auto-saved as '{str_val}'")
+
     def handle_open_settings(self):
         """Opens main application settings dialog."""
         try:
@@ -585,9 +626,18 @@ class AppController:
                 auto_save_switch=self.auto_save_switch,
                 current_ai_provider=self.db_manager.get_setting("AI_PROVIDER") or "gemini",
                 current_active_model_id=self.db_manager.get_setting("ACTIVE_LOCAL_MODEL") or local_models_catalog.DEFAULT_MODEL_ID,
-                current_gpu_acceleration=(self.db_manager.get_setting("GPU_ACCELERATION") != "False"),
                 on_save_settings=self.handle_save_settings,
-                on_open_model_manager=self.handle_open_model_manager
+                on_setting_changed=self.handle_setting_change,
+                on_open_model_manager=self.handle_open_model_manager,
+                current_gpu_acceleration=(self.db_manager.get_setting("GPU_ACCELERATION") != "False"),
+                current_api_key=self.db_manager.get_setting("GEMINI_API_KEY") or "",
+                current_db_path=os.path.abspath(self.db_manager.db_path),
+                current_models_dir=self.db_manager.get_setting("MODELS_DIR") or local_models_catalog.get_default_models_dir(),
+                current_custom_prompt=self.db_manager.get_setting("AI_CUSTOM_SYSTEM_PROMPT") or "",
+                current_confirm_delete_note=(self.db_manager.get_setting("CONFIRM_DELETE_NOTE") != "False"),
+                current_confirm_delete_col=(self.db_manager.get_setting("CONFIRM_DELETE_COLLECTION") != "False"),
+                current_custom_db_path=self.db_manager.get_setting("CUSTOM_DB_PATH") or "",
+                on_reset_defaults=self.handle_reset_settings
             )
         except Exception as ex:
             log_error(f"Error opening settings dialog: {ex}")

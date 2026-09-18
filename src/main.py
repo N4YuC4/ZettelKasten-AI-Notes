@@ -15,6 +15,7 @@ from hardware_checker import HardwareChecker
 HardwareChecker.configure_vulkan_environment()
 
 import database_manager
+from settings_manager import SettingsManager
 from note_service import NoteService
 from app_state import AppState
 from app_controller import AppController
@@ -30,7 +31,10 @@ def main(page: ft.Page):
     page.padding = ft.Padding.all(6)
 
     # 2. Service & State Initialization
-    db_manager = database_manager.DatabaseManager()
+    settings_mgr = SettingsManager.get_instance()
+    custom_db = settings_mgr.get_setting("CUSTOM_DB_PATH")
+    db_path = custom_db if custom_db and os.path.exists(os.path.dirname(os.path.abspath(custom_db))) else None
+    db_manager = database_manager.DatabaseManager(db_path=db_path, settings_manager=settings_mgr)
     note_service = NoteService(db_manager)
 
     saved_theme = db_manager.get_setting("UI_THEME") or "Dark"
@@ -95,10 +99,7 @@ def main(page: ft.Page):
             current_title=title,
             on_submit=lambda new_title: controller.handle_rename_note(nid, new_title)
         ),
-        on_delete_note_clicked=lambda nid, title: dialog_manager.show_delete_note_confirm(
-            note_title=title,
-            on_confirm=lambda: controller.handle_delete_note(nid, title)
-        ),
+        on_delete_note_clicked=controller.confirm_or_delete_note,
         on_settings_clicked=controller.handle_open_settings,
         on_collapse_clicked=controller.toggle_sidebar
     )

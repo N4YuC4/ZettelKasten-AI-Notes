@@ -171,11 +171,8 @@ pip install -r requirements.txt
 
 #### Option A: Using Google Gemini (Cloud AI)
 1. Obtain an API key from [Google AI Studio](https://aistudio.google.com/).
-2. Create a `.env` file in the project root:
-   ```env
-   GEMINI_API_KEY="your_api_key_here"
-   ```
-   *(Alternatively, configure the key in the in-app Settings dialog).*
+2. Launch the application and configure the API key directly in the in-app **Settings (`⚙️`) -> AI Settings -> Gemini API Key**.
+3. The key and all application preferences are stored locally and securely in `db/settings.db`.
 
 #### Option B: Using Local GGUF Models (Offline AI)
 1. Launch the application.
@@ -267,7 +264,7 @@ The project includes an extensive automated test suite covering domain logic, UI
 ./.venv/bin/pytest tests/test_markdown_editor.py
 ```
 
-All **181 tests** execute and pass in ~1.6 seconds.
+All **190 tests** execute and pass in ~2 seconds.
 
 ---
 

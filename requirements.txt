@@ -2,7 +2,6 @@
 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan
 
 flet
-python-dotenv
 markdown
 google-genai
 pypdf

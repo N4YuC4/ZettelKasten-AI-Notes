@@ -5,14 +5,11 @@
 # from the given text content and transforms them into structured JSON format notes.
 
 from google import genai # Modern Google GenAI API library
-from dotenv import load_dotenv # To load environment variables from a .env file
 import os # For accessing environment variables
 import json # To process JSON data
 import re # For regex operations
 import traceback # For detailed error tracing
 from logger import log_debug, log_error # For logging functions
-
-load_dotenv() # Load environment variables from .env on module import
 
 
 # Custom Typed Exceptions for Gemini API operations
@@ -39,12 +36,23 @@ from ai_provider import BaseAiProvider
 # The GeminiApiClient class communicates with the Gemini API and manages note generation requests.
 class GeminiApiClient(BaseAiProvider):
     # The __init__ method initializes the API client, loads the API key, and configures the model.
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, db_manager=None, settings_manager=None):
         if not api_key:
-            api_key = os.getenv("GEMINI_API_KEY") # Get the API key from environment variables
+            if settings_manager is not None:
+                api_key = settings_manager.get_setting("GEMINI_API_KEY")
+            elif db_manager is not None:
+                api_key = db_manager.get_setting("GEMINI_API_KEY")
+            else:
+                try:
+                    from settings_manager import SettingsManager
+                    api_key = SettingsManager.get_instance().get_setting("GEMINI_API_KEY")
+                except Exception:
+                    pass
+        if not api_key:
+            api_key = os.getenv("GEMINI_API_KEY")
 
-        if not api_key: # If the API key is not found, raise typed GeminiAuthError
-            raise GeminiAuthError("Gemini API Key not found. Please set the GEMINI_API_KEY environment variable in a .env file or via the application's menu (Settings -> Enter Gemini API Key).")
+        if not api_key:
+            raise GeminiAuthError("Gemini API Key not found. Please enter your Gemini API Key in Settings.")
 
         self.client = genai.Client(api_key=api_key) # Configure the Google GenAI client with the key
         self.model_name = 'gemma-4-31b-it'
@@ -54,12 +62,18 @@ class GeminiApiClient(BaseAiProvider):
         return AiResponseParser.parse_notes_json(notes_json_str)
 
     # The generate_zettelkasten_notes method generates Zettelkasten-style notes from the given text content.
-    def generate_zettelkasten_notes(self, text_content, on_progress: Optional[Callable[[str], None]] = None):
+    def generate_zettelkasten_notes(
+        self,
+        text_content,
+        on_progress: Optional[Callable[[str], None]] = None,
+        custom_system_prompt: Optional[str] = None
+    ):
         """
         Generates Zettelkasten-style notes from the given text content using the Gemini API.
         Args:
             text_content (str): The text content from which to generate notes.
             on_progress (callable, optional): Optional callback for progress updates.
+            custom_system_prompt (str, optional): User-defined custom instructions.
         Returns:
             list: A list of generated notes, where each note is a dictionary
                   with 'general_title', 'title', 'content' and 'connections' keys.
@@ -86,7 +100,7 @@ class GeminiApiClient(BaseAiProvider):
         if len(sanitized_text) > MAX_SAFE_CHARS:
             sanitized_text = sanitized_text[:MAX_SAFE_CHARS]
 
-        prompt = build_note_extraction_prompt(sanitized_text)
+        prompt = build_note_extraction_prompt(sanitized_text, custom_system_prompt=custom_system_prompt)
         try:
             response = self.client.models.generate_content(
                 model=self.model_name,

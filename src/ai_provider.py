@@ -84,4 +84,6 @@ def create_ai_provider(
     else:
         from gemini_api_client import GeminiApiClient
         api_key = kwargs.get("api_key")
-        return GeminiApiClient(api_key=api_key)
+        if not api_key and db_manager:
+            api_key = db_manager.get_setting("GEMINI_API_KEY")
+        return GeminiApiClient(api_key=api_key, db_manager=db_manager)

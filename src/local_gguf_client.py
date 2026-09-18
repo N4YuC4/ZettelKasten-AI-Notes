@@ -311,14 +311,16 @@ class LocalGgufClient(BaseAiProvider):
         chunk_text: str,
         previous_notes_json: Optional[str] = None,
         existing_titles: Optional[List[str]] = None,
-        unified_general_title: Optional[str] = None
+        unified_general_title: Optional[str] = None,
+        custom_system_prompt: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Executes a single LLM chat completion on chunk_text with optional chained context."""
         user_prompt = build_note_extraction_prompt(
             chunk_text=chunk_text,
             previous_notes_json=previous_notes_json,
             existing_titles=existing_titles,
-            unified_general_title=unified_general_title
+            unified_general_title=unified_general_title,
+            custom_system_prompt=custom_system_prompt,
         )
 
         messages = [
@@ -355,7 +357,8 @@ class LocalGgufClient(BaseAiProvider):
     def generate_zettelkasten_notes(
         self,
         text_content: str,
-        on_progress: Optional[Callable[[str], None]] = None
+        on_progress: Optional[Callable[[str], None]] = None,
+        custom_system_prompt: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generates Zettelkasten-style atomic notes from text content using the local GGUF model.
@@ -405,7 +408,7 @@ class LocalGgufClient(BaseAiProvider):
         if total_tokens <= max_prompt_tokens:
             if on_progress:
                 on_progress("AI is extracting notes...")
-            return self._execute_inference(sanitized_text)
+            return self._execute_inference(sanitized_text, custom_system_prompt=custom_system_prompt)
 
         # 2. Document exceeds budget -> semantic chunking with Chained JSON Context
         log_debug(
@@ -431,7 +434,8 @@ class LocalGgufClient(BaseAiProvider):
                     chunk_text=chunk,
                     previous_notes_json=previous_chunk_json,
                     existing_titles=all_seen_titles_list if all_seen_titles_list else None,
-                    unified_general_title=unified_general_title
+                    unified_general_title=unified_general_title,
+                    custom_system_prompt=custom_system_prompt,
                 )
                 new_chunk_notes: List[Dict[str, Any]] = []
                 for note in chunk_notes:
