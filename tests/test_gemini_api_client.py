@@ -187,4 +187,90 @@ def test_generate_note_links_api_error_fallback(monkeypatch):
     assert res[0]["connections"] == []
 
 
+def test_generate_zettelkasten_notes_multi_chunk_chained_context(monkeypatch):
+    import json
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy_key")
+    client = GeminiApiClient()
+    client.client = MagicMock()
+
+    # Generate text large enough to trigger multi-chunk (> 4500 tokens / ~15,000 chars)
+    paras = [f"Paragraph {i}: Detailed discourse on formal cognitive models and neural logic." for i in range(250)]
+    large_text = "\n\n".join(paras)
+
+    progress_reports = []
+    def on_prog(msg):
+        progress_reports.append(msg)
+
+    chunk_call_count = 0
+    def mock_generate_content(model, contents):
+        nonlocal chunk_call_count
+        chunk_call_count += 1
+        resp = MagicMock()
+        resp.text = json.dumps({
+            "general_title": "Cognitive Models",
+            "notes": [
+                {
+                    "id": 1,
+                    "title": f"Note from Chunk {chunk_call_count}",
+                    "content": f"Detailed content {chunk_call_count}"
+                }
+            ],
+            "links": []
+        })
+        return resp
+
+    client.client.models.generate_content.side_effect = mock_generate_content
+
+    # monkeypatch time.sleep to run instantaneously
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    notes = client.generate_zettelkasten_notes(large_text, on_progress=on_prog)
+
+    # Verify multi-chunk occurred
+    assert chunk_call_count >= 2
+    assert len(notes) == chunk_call_count
+    assert any("Part 1/" in p for p in progress_reports)
+    assert any("Part 2/" in p for p in progress_reports)
+
+    # Verify global IDs are sequential 1, 2...
+    assert notes[0]["id"] == 1
+    assert notes[1]["id"] == 2
+
+    # Verify chained context call args for second chunk: contains PREVIOUS NOTES without 'connections'
+    second_call_prompt = client.client.models.generate_content.call_args_list[1][1]["contents"]
+    assert "PREVIOUS NOTES (REFERENCE)" in second_call_prompt
+    assert "Note from Chunk 1" in second_call_prompt
+    assert '"connections"' not in second_call_prompt
+
+
+def test_execute_inference_429_backoff_retry_success(monkeypatch):
+    import json
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy_key")
+    client = GeminiApiClient()
+    client.client = MagicMock()
+
+    calls = 0
+    def mock_generate_with_retry(model, contents):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise Exception("429 RESOURCE_EXHAUSTED: Rate limit reached, try later")
+        resp = MagicMock()
+        resp.text = json.dumps({
+            "general_title": "Retry Test",
+            "notes": [{"id": 1, "title": "Retry Success Note", "content": "Success!"}],
+            "links": []
+        })
+        return resp
+
+    client.client.models.generate_content.side_effect = mock_generate_with_retry
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    notes = client.generate_zettelkasten_notes("Small test text")
+    assert calls == 2
+    assert len(notes) == 1
+    assert notes[0]["title"] == "Retry Success Note"
+
+
+
 

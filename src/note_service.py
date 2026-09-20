@@ -56,8 +56,39 @@ def sanitize_title(content: str) -> str:
     cleaned = re.sub(r'\[\[(.*?)\]\]', _extract_wikilink_text, cleaned)
     # Remove remaining special characters
     cleaned = re.sub(r'[<>:"/\\|?*]', '', cleaned)
-    
     cleaned = cleaned.strip()
+
+    # Strip wrapping single/double quotes if the entire title is surrounded by quotes
+    if (cleaned.startswith("'") and cleaned.endswith("'") and len(cleaned) > 1) or \
+       (cleaned.startswith('"') and cleaned.endswith('"') and len(cleaned) > 1):
+        cleaned = cleaned[1:-1].strip()
+
+    # Identify true apostrophes:
+    # 1. Contractions and singular possessives: flanked by alphanumeric (e.g., Turing's, don't)
+    # 2. Plural possessives followed by space and word (e.g., Students' Union, teachers' lounge)
+    quote_matches = list(re.finditer(r"'", cleaned))
+    non_apostrophes = []
+    for m in quote_matches:
+        idx = m.start()
+        prev_char = cleaned[idx - 1] if idx > 0 else " "
+        next_char = cleaned[idx + 1] if idx < len(cleaned) - 1 else " "
+        # Flanked by word chars: internal apostrophe
+        if prev_char.isalnum() and next_char.isalnum():
+            continue
+        # Plural possessive followed by space and word: e.g. Students' Union
+        if prev_char.lower() == 's' and next_char.isspace() and idx < len(cleaned) - 2 and cleaned[idx + 2].isalnum():
+            continue
+        non_apostrophes.append(idx)
+
+    # If odd number of quotation marks:
+    if len(non_apostrophes) % 2 != 0:
+        if cleaned.startswith("'"):
+            cleaned = cleaned[1:].strip()
+        elif cleaned.endswith("'"):
+            cleaned = cleaned[:-1].strip()
+        else:
+            cleaned = cleaned + "'"
+
     return cleaned if cleaned else "Untitled Note"
 
 

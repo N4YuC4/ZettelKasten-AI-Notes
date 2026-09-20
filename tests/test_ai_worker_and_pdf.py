@@ -311,7 +311,19 @@ def test_resolve_target_id_strict_matching():
     # 3. Case-folded exact match
     assert _resolve_target_id("binaural beats", batch_map, global_map) == "id-1"
 
-    # 4. Strict rejection of substrings / prefixes / partial fuzzy matches to avoid false graph links
+    # 4. Article-stripped matching (e.g., 'The ...' <-> '...')
+    batch_with_articles = {
+        "The Argument from Consciousness (Jefferson's Critique)": "id-art-1",
+        "Digital Computers as Discrete State Machines": "id-morph-1",
+    }
+    assert _resolve_target_id("Argument from Consciousness (Jefferson's Critique)", batch_with_articles, {}) == "id-art-1"
+    assert _resolve_target_id("The Argument from Consciousness (Jefferson's Critique)", batch_with_articles, {}) == "id-art-1"
+
+    # 5. Morphological token 1-to-1 matching (singular/plural variations: Computer <-> Computers)
+    assert _resolve_target_id("Digital Computer as Discrete State Machines", batch_with_articles, {}) == "id-morph-1"
+    assert _resolve_target_id("Digital Computers as Discrete State Machine", batch_with_articles, {}) == "id-morph-1"
+
+    # 6. Strict rejection of substrings / prefixes / partial fuzzy matches to avoid false graph links
     # 'Binaural' is only part of 'Binaural Beats' -> must return None
     assert _resolve_target_id("Binaural", batch_map, global_map) is None
     # 'Transcranial Magnetic Stimulation' missing '(TMS)' -> must return None
@@ -319,6 +331,7 @@ def test_resolve_target_id_strict_matching():
     # Dissimilar or unknown target returns None
     assert _resolve_target_id("Direct Brain Stimulation", batch_map, global_map) is None
     assert _resolve_target_id("Completely Unrelated Topic", batch_map, global_map) is None
+
 
 
 def test_worker_unloads_cached_model_on_finish(temp_db, monkeypatch):
@@ -439,6 +452,66 @@ def test_worker_gemini_calls_generate_note_links(temp_db, monkeypatch):
     assert any("Analyzing graph connections" in m for m in progress_messages)
 
 
+def test_worker_merges_stage1_folgezettel_and_stage2_verweis_links(temp_db, monkeypatch):
+    """
+    Verifies that:
+    1. Tier 1 (Folgezettel / Intra-chunk) connections from Stage 1 are preserved and made bidirectional.
+    2. Tier 2 (Verweis / Macro) connections from Stage 2 are merged seamlessly.
+    3. Standalone notes with no connections remain unlinked (no artificial/forced links).
+    """
+    stage1_notes = [
+        {"title": "Hardware Architecture", "content": "Three-part computer architecture.", "connections": [], "general_title": "Turing"},
+        {"title": "Store Unit", "content": "The memory store sub-component.", "connections": ["Hardware Architecture"], "general_title": "Turing"},
+        {"title": "Philosophical Objection", "content": "The theological and mathematical objections.", "connections": [], "general_title": "Turing"},
+        {"title": "Standalone Historical Axiom", "content": "Independent historical context.", "connections": [], "general_title": "Turing"}
+    ]
 
+    mock_gemini = MagicMock()
+    mock_gemini.generate_zettelkasten_notes.return_value = stage1_notes
+    def mock_linking(notes, on_progress=None):
+        from ai_response_parser import AiResponseParser
+        return AiResponseParser.attach_links_to_notes(notes, [(1, 3)])
 
+    mock_gemini.generate_note_links.side_effect = mock_linking
+    monkeypatch.setattr("ai_note_generator_worker.GeminiApiClient", lambda: mock_gemini)
 
+    worker = AiNoteGeneratorWorker("dummy text", on_finished=None, on_error=None)
+    worker.run()
+
+    # Verify notes and links in database
+    title_to_id = temp_db.get_all_note_titles_and_ids()
+    id_hw = title_to_id["Hardware Architecture"]
+    id_store = title_to_id["Store Unit"]
+    id_obj = title_to_id["Philosophical Objection"]
+    id_axiom = title_to_id["Standalone Historical Axiom"]
+
+    # Check links
+    hw_links = temp_db.get_note_links(id_hw)
+    store_links = temp_db.get_note_links(id_store)
+    obj_links = temp_db.get_note_links(id_obj)
+    axiom_links = temp_db.get_note_links(id_axiom)
+
+    # Hardware Architecture should be linked to Store Unit (Folgezettel) AND Philosophical Objection (Verweis)
+    assert id_store in hw_links
+    assert id_obj in hw_links
+
+    # Store Unit should be linked to Hardware Architecture (Folgezettel)
+    assert id_hw in store_links
+
+    # Philosophical Objection should be linked to Hardware Architecture (Verweis)
+    assert id_hw in obj_links
+
+    # Standalone Historical Axiom must have ZERO links (unforced/genuine isolation)
+    assert len(axiom_links) == 0
+
+    # Check Markdown wikilinks inside note contents
+    hw_content = temp_db.read_note_content(id_hw)
+    assert "[[Store Unit]]" in hw_content
+    assert "[[Philosophical Objection]]" in hw_content
+
+    store_content = temp_db.read_note_content(id_store)
+    assert "[[Hardware Architecture]]" in store_content
+
+    axiom_content = temp_db.read_note_content(id_axiom)
+    assert "## Related Notes" not in axiom_content
+    assert "[[" not in axiom_content

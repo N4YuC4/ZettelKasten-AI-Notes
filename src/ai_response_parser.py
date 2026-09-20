@@ -36,8 +36,25 @@ class AiResponseParser:
 
     @staticmethod
     def strip_qualifiers(title: str) -> str:
-        """Strips parenthetical qualifiers, brackets, and currency signs for fuzzy title comparison."""
-        return re.sub(r"\s*[\(\[].*?[\)\]]", "", title).replace("$", "").strip().casefold()
+        """Strips parenthetical qualifiers, brackets, leading articles, and currency signs for canonical title comparison."""
+        cleaned = re.sub(r"^(?:the|a|an)\s+", "", title.strip(), flags=re.IGNORECASE)
+        return re.sub(r"\s*[\(\[].*?[\)\]]", "", cleaned).replace("$", "").strip().casefold()
+
+    @staticmethod
+    def normalize_tokens(text: str) -> List[str]:
+        """Extracts canonical word stems from text, stripping leading articles."""
+        s = re.sub(r"^(?:the|a|an)\s+", "", text.strip(), flags=re.IGNORECASE)
+        words = re.findall(r"\b\w+\b", s.casefold())
+        stemmed = []
+        for w in words:
+            if len(w) > 3 and w.endswith("ies"):
+                stemmed.append(w[:-3] + "y")
+            elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+                stemmed.append(w[:-1])
+            else:
+                stemmed.append(w)
+        return stemmed
+
 
     @classmethod
     def clean_connections(cls, raw_connections: Any, current_title: str = "") -> List[str]:
@@ -119,18 +136,23 @@ class AiResponseParser:
                 if "connections" not in n or not isinstance(n["connections"], list):
                     n["connections"] = []
 
-            # 1-based index mapping
+            # 1-based index mapping (authoritative sequential index sent to LLM in full_notes_payload)
             num_id = idx + 1
             id_to_note[num_id] = n
             id_to_note[str(num_id)] = n
 
-            # Explicit ID mapping if present on note
-            if "id" in n:
-                id_to_note[n["id"]] = n
-                try:
-                    id_to_note[int(n["id"])] = n
-                except (ValueError, TypeError):
-                    pass
+            # Map explicit non-numeric ID (e.g. UUID) without overriding sequential integer indices
+            raw_id = n.get("id")
+            if raw_id is not None and not isinstance(raw_id, int):
+                raw_str = str(raw_id).strip()
+                if not raw_str.isdigit():
+                    id_to_note[raw_id] = n
+
+        token_map: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+        for t, n in note_by_title.items():
+            toks = tuple(cls.normalize_tokens(t))
+            if len(toks) >= 2 and toks not in token_map:
+                token_map[toks] = n
 
         def resolve_endpoint(val: Any) -> Optional[Dict[str, Any]]:
             if val is None:
@@ -147,6 +169,9 @@ class AiResponseParser:
                 val_norm = cls.strip_qualifiers(val_clean)
                 if val_norm in stripped_title_map:
                     return note_by_title[stripped_title_map[val_norm]]
+                val_toks = tuple(cls.normalize_tokens(val_clean))
+                if len(val_toks) >= 2 and val_toks in token_map:
+                    return token_map[val_toks]
             return None
 
         for src_val, tgt_val in pairs:
@@ -217,14 +242,13 @@ class AiResponseParser:
             id_to_note[idx + 1] = it
             id_to_note[str(idx + 1)] = it
 
-            # Explicit ID mapping if provided by model
+            # Explicit ID mapping if provided by model (non-numeric only to avoid clobbering)
             if "id" in it:
                 raw_id = it["id"]
-                id_to_note[raw_id] = it
-                try:
-                    id_to_note[int(raw_id)] = it
-                except (ValueError, TypeError):
-                    pass
+                if not isinstance(raw_id, int):
+                    raw_str = str(raw_id).strip()
+                    if not raw_str.isdigit():
+                        id_to_note[raw_id] = it
 
             if canon_title:
                 clean_title_map[canon_title.casefold()] = canon_title
@@ -374,12 +398,86 @@ class AiResponseParser:
 
         return fixed
 
+    @staticmethod
+    def repair_truncated_json(raw: str) -> str:
+        """
+        Repairs truncated JSON strings caused by LLMs hitting max_tokens limits.
+        Closes dangling string escapes, removes trailing incomplete keys/colons/commas,
+        and balances unclosed brackets ('[' -> ']' and '{' -> '}').
+        """
+        if not raw or not isinstance(raw, str):
+            return ""
+
+        s = raw.strip()
+
+        # 1. Strip trailing dangling backslash if cut off mid-escape
+        if s.endswith("\\"):
+            s = s[:-1]
+
+        # 2. Check if stopped inside an unclosed string
+        in_str = False
+        escape = False
+        for ch in s:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+
+        # If cut off mid-string, the current element is incomplete.
+        # Discard the incomplete element back to before its unclosed '{' brace.
+        if in_str:
+            last_open_brace = s.rfind("{")
+            last_close_brace = s.rfind("}")
+            if last_open_brace > last_close_brace:
+                s = s[:last_open_brace].rstrip(" \t\r\n,")
+            else:
+                s += '"'
+
+        # 3. Strip incomplete trailing key, colon, or comma
+        # e.g., , "title": " or , "tit" or , {
+        s = re.sub(r',\s*"[^"]*"\s*:\s*"[^"]*$', '', s)
+        s = re.sub(r',\s*"[^"]*"\s*:\s*$', '', s)
+        s = re.sub(r',\s*"[^"]*"\s*$', '', s)
+        s = re.sub(r',\s*\{[^{}]*$', '', s)
+        s = s.rstrip(' \t\r\n,:/')
+
+        # 4. Recalculate bracket stack after stripping
+        stack = []
+        in_str = False
+        escape = False
+        for ch in s:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch in "{[":
+                    stack.append("}" if ch == "{" else "]")
+                elif ch in "}]":
+                    if stack and stack[-1] == ch:
+                        stack.pop()
+
+        # 5. Append missing closing brackets in reverse order
+        while stack:
+            s += stack.pop()
+
+        return s
+
     @classmethod
     def parse_notes_json(cls, response_text: str) -> List[Dict[str, Any]]:
         """
         Parses notes JSON from raw model response text.
-        Applies multi-stage recovery: clean parse, markdown code blocks, raw_decode,
-        backslash fixes, outermost bracket slicing, and truncated array salvaging.
+        Applies multi-stage recovery: clean parse, truncation repair, markdown code blocks,
+        raw_decode (non-strict), backslash fixes, outermost bracket slicing, resilient array
+        salvaging, and regex pattern fallback.
         """
         if not response_text or not isinstance(response_text, str):
             return []
@@ -404,6 +502,18 @@ class AiResponseParser:
         except json.JSONDecodeError:
             pass
 
+        # 1b. Truncated repair on raw string
+        try:
+            repaired_str = cls.repair_truncated_json(cleaned_str)
+            if repaired_str and repaired_str != cleaned_str:
+                parsed = json.loads(repaired_str, strict=False)
+                norm = cls.normalize_notes_data(parsed)
+                if norm:
+                    log_debug(f"Successfully parsed {len(norm)} notes using repair_truncated_json.")
+                    return norm
+        except Exception:
+            pass
+
         # 2. Markdown code block extraction
         code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_str)
         for block in code_blocks:
@@ -415,11 +525,20 @@ class AiResponseParser:
                     return norm
             except json.JSONDecodeError:
                 pass
+            try:
+                repaired_block = cls.repair_truncated_json(block_cleaned)
+                if repaired_block and repaired_block != block_cleaned:
+                    parsed = json.loads(repaired_block, strict=False)
+                    norm = cls.normalize_notes_data(parsed)
+                    if norm:
+                        return norm
+            except Exception:
+                pass
             for start_char in ('[', '{'):
                 start_idx = block_cleaned.find(start_char)
                 if start_idx != -1:
                     try:
-                        decoder = json.JSONDecoder()
+                        decoder = json.JSONDecoder(strict=False)
                         parsed, _ = decoder.raw_decode(block_cleaned[start_idx:])
                         norm = cls.normalize_notes_data(parsed)
                         if norm:
@@ -427,12 +546,12 @@ class AiResponseParser:
                     except json.JSONDecodeError:
                         pass
 
-        # 3. Bracket extraction via raw_decode
+        # 3. Bracket extraction via raw_decode (strict=False)
         for start_char in ('[', '{'):
             idx = cleaned_str.find(start_char)
             if idx != -1:
                 try:
-                    decoder = json.JSONDecoder()
+                    decoder = json.JSONDecoder(strict=False)
                     parsed, _ = decoder.raw_decode(cleaned_str[idx:])
                     norm = cls.normalize_notes_data(parsed)
                     if norm:
@@ -447,7 +566,7 @@ class AiResponseParser:
                 start_idx = fixed_str.find(start_char)
                 if start_idx != -1:
                     try:
-                        decoder = json.JSONDecoder()
+                        decoder = json.JSONDecoder(strict=False)
                         parsed, _ = decoder.raw_decode(fixed_str[start_idx:])
                         norm = cls.normalize_notes_data(parsed)
                         if norm:
@@ -474,31 +593,66 @@ class AiResponseParser:
                 except json.JSONDecodeError:
                     pass
 
-        # 6. Salvage completed notes from truncated array if model hit max_tokens
-        idx = cleaned_str.find('"notes"')
-        if idx != -1:
+        # 6. Resilient salvage of completed notes from truncated array
+        note_keys = ('"notes"', '"zettelkasten"', '"data"', '"items"', '"result"', '"generated_notes"')
+        array_start = -1
+        for key in note_keys:
+            idx = cleaned_str.find(key)
+            if idx != -1:
+                array_start = cleaned_str.find('[', idx)
+                if array_start != -1:
+                    break
+
+        if array_start == -1:
+            array_start = cleaned_str.find('[')
+
+        if array_start != -1:
             gen_match = re.search(r'"general_title"\s*:\s*"([^"]+)"', cleaned_str)
             gen_title = gen_match.group(1).strip() if gen_match else None
-            array_start = cleaned_str.find('[', idx)
-            if array_start != -1:
-                cur = array_start + 1
-                decoder = json.JSONDecoder()
-                salvaged = []
-                while cur < len(cleaned_str):
-                    while cur < len(cleaned_str) and cleaned_str[cur] in ' \t\r\n,':
-                        cur += 1
-                    if cur >= len(cleaned_str) or cleaned_str[cur] == ']':
+            cur = array_start + 1
+            decoder = json.JSONDecoder(strict=False)
+            salvaged = []
+            while cur < len(cleaned_str):
+                while cur < len(cleaned_str) and cleaned_str[cur] in ' \t\r\n,':
+                    cur += 1
+                if cur >= len(cleaned_str) or cleaned_str[cur] == ']':
+                    break
+                try:
+                    obj, end = decoder.raw_decode(cleaned_str[cur:])
+                    if isinstance(obj, dict) and (obj.get('title') or obj.get('content')):
+                        salvaged.append(obj)
+                    cur += end
+                except json.JSONDecodeError:
+                    # Do not abort immediately; advance to next note object '{'
+                    next_brace = cleaned_str.find('{', cur + 1)
+                    if next_brace != -1:
+                        cur = next_brace
+                    else:
                         break
-                    try:
-                        obj, end = decoder.raw_decode(cleaned_str[cur:])
-                        if isinstance(obj, dict) and ('title' in obj or 'content' in obj):
-                            salvaged.append(obj)
-                        cur += end
-                    except json.JSONDecodeError:
-                        break
-                if salvaged:
-                    log_debug(f"Successfully salvaged {len(salvaged)} notes from truncated JSON response.")
-                    return cls.normalize_notes_data({"notes": salvaged, "general_title": gen_title})
+            if salvaged:
+                log_debug(f"Successfully salvaged {len(salvaged)} notes from truncated JSON response.")
+                return cls.normalize_notes_data({"notes": salvaged, "general_title": gen_title})
+
+        # 7. Regex pattern fallback for severely malformed note blocks
+        raw_notes = []
+        gen_match = re.search(r'"general_title"\s*:\s*"([^"]+)"', cleaned_str)
+        gen_title = gen_match.group(1).strip() if gen_match else None
+
+        for note_match in re.finditer(
+            r'\{\s*"id"\s*:\s*(\d+)\s*,\s*"title"\s*:\s*"([^"]+)"\s*,\s*"content"\s*:\s*"((?:[^"\\]|\\.)*)"',
+            cleaned_str
+        ):
+            n_id, n_title, n_content = note_match.groups()
+            n_content_clean = n_content.replace(r'\"', '"').replace(r'\n', '\n')
+            raw_notes.append({
+                "id": int(n_id),
+                "title": n_title.strip(),
+                "content": n_content_clean.strip(),
+            })
+
+        if raw_notes:
+            log_debug(f"Successfully salvaged {len(raw_notes)} notes via regex pattern fallback.")
+            return cls.normalize_notes_data({"notes": raw_notes, "general_title": gen_title})
 
         return []
 
@@ -554,6 +708,17 @@ class AiResponseParser:
         except Exception:
             pass
 
+        # 1b. Truncated repair on raw string
+        try:
+            repaired_str = AiResponseParser.repair_truncated_json(cleaned_str)
+            if repaired_str and repaired_str != cleaned_str:
+                parsed = json.loads(repaired_str, strict=False)
+                res = extract_pairs(parsed)
+                if res:
+                    return res
+        except Exception:
+            pass
+
         # 2. Markdown code block
         code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_str)
         for block in code_blocks:
@@ -564,13 +729,22 @@ class AiResponseParser:
                     return res
             except Exception:
                 pass
+            try:
+                repaired_block = AiResponseParser.repair_truncated_json(block.strip())
+                if repaired_block and repaired_block != block.strip():
+                    parsed = json.loads(repaired_block, strict=False)
+                    res = extract_pairs(parsed)
+                    if res:
+                        return res
+            except Exception:
+                pass
 
-        # 3. Bracket extraction
+        # 3. Bracket extraction (strict=False)
         for start_char in ('{', '['):
             idx = cleaned_str.find(start_char)
             if idx != -1:
                 try:
-                    decoder = json.JSONDecoder()
+                    decoder = json.JSONDecoder(strict=False)
                     parsed, _ = decoder.raw_decode(cleaned_str[idx:])
                     res = extract_pairs(parsed)
                     if res:
@@ -592,7 +766,7 @@ class AiResponseParser:
 
         if array_start != -1:
             cur = array_start + 1
-            decoder = json.JSONDecoder()
+            decoder = json.JSONDecoder(strict=False)
             salvaged_items: List[Any] = []
             while cur < len(cleaned_str):
                 while cur < len(cleaned_str) and cleaned_str[cur] in ' \t\r\n,':
@@ -605,7 +779,16 @@ class AiResponseParser:
                         salvaged_items.append(obj)
                     cur += end
                 except Exception:
-                    break
+                    # Advance to next '{' or '[' to salvage subsequent links
+                    next_brace = -1
+                    for bc in ('{', '['):
+                        found_idx = cleaned_str.find(bc, cur + 1)
+                        if found_idx != -1 and (next_brace == -1 or found_idx < next_brace):
+                            next_brace = found_idx
+                    if next_brace != -1:
+                        cur = next_brace
+                    else:
+                        break
             res = extract_pairs(salvaged_items)
             if res:
                 return res

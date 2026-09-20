@@ -433,6 +433,26 @@ def test_generate_note_links_full_content_and_attachment():
     # Check connection was attached
     assert "PHP Data Types" in result[0]["connections"]
     assert "PHP Variables" in result[1]["connections"]
+    assert call_args["max_tokens"] >= 4096
+
+
+def test_generate_note_links_max_tokens_floor_4k():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    client.n_ctx = 8192
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": json.dumps({"links": []})}}]
+    }
+    client.llm = mock_llm
+
+    notes = [
+        {"title": f"Note {i}", "content": "Detailed discourse on concepts."}
+        for i in range(20)
+    ]
+    client.generate_note_links(notes)
+
+    call_args = mock_llm.create_chat_completion.call_args[1]
+    assert call_args["max_tokens"] >= 4096
 
 
 def test_generate_note_links_single_note_noop():
@@ -769,6 +789,77 @@ def test_generate_note_links_universal_language_agnostic_prompt():
     assert '"source": 1, "target": 2' in call_prompt
     assert "Gözlemci Etkisi" in linked_notes[0]["connections"]
     assert "Çökme Mekanizması" in linked_notes[1]["connections"]
+
+
+def test_universal_dynamic_chunking_unstructured_blob():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    # Raw unstructured blob with NO newlines, only sentences
+    blob_sentences = [
+        f"Sentence number {i} explains an important scientific mechanism in color analysis."
+        for i in range(1, 300)
+    ]
+    raw_blob = " ".join(blob_sentences)
+
+    total_tok = client._count_tokens(raw_blob)
+    assert total_tok > 2000
+
+    chunks = client._chunk_text(raw_blob, max_chunk_tokens=1800, overlap_tokens=200)
+    assert len(chunks) >= 2
+
+    # Verify every chunk is within safe budget
+    for ch in chunks:
+        ch_tokens = client._count_tokens(ch)
+        assert ch_tokens <= 2100  # allowing for overlap
+        # Verify no mid-sentence truncation
+        assert ch.endswith(".") or ch.endswith("!") or ch.endswith("?")
+
+
+def test_universal_dynamic_chunking_short_single_pass():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    short_text = "This is a concise short document with two paragraphs.\n\nIt covers an atomic concept."
+    chunks = client._chunk_text(short_text, max_chunk_tokens=1800)
+    assert len(chunks) == 1
+    assert chunks[0] == short_text
+
+
+def test_universal_dynamic_chunking_balanced_distribution():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    # 5,000+ tokens of paragraphs
+    paras = [f"Paragraph {i}: " + ("data science and colorimetry concepts " * 15) for i in range(1, 50)]
+    full_text = "\n\n".join(paras)
+    total_tokens = client._count_tokens(full_text)
+    assert total_tokens > 4000
+
+    chunks = client._chunk_text(full_text, max_chunk_tokens=1800, overlap_tokens=200)
+    assert len(chunks) >= 3
+
+    # Ensure chunks are fairly balanced (none are extreme outliers like 100 tokens vs 4000 tokens)
+    chunk_tokens = [client._count_tokens(c) for c in chunks]
+    for ct in chunk_tokens:
+        assert ct >= 500
+        assert ct <= 2000
+
+
+def test_execute_inference_sampling_parameters_forwarded():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    client.n_ctx = 8192
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": json.dumps([{"title": "T", "content": "C"}])}}]
+    }
+    client.llm = mock_llm
+
+    res = client._execute_inference("Sample text")
+    assert len(res) == 1
+
+    call_kwargs = mock_llm.create_chat_completion.call_args[1]
+    assert call_kwargs.get("temperature") == 0.2
+    assert call_kwargs.get("repeat_penalty") == 1.1
+    assert call_kwargs.get("top_p") == 0.95
+    assert call_kwargs.get("max_tokens") <= 4096
+    # response_format is omitted to avoid CPU BNF grammar slowdown
+    assert "response_format" not in call_kwargs
+
 
 
 

@@ -154,6 +154,27 @@ def test_sanitize_title_preserves_link_text():
     assert note_service.sanitize_title("   ") == "Untitled Note"
 
 
+def test_sanitize_title_quote_balancing():
+    # Unclosed single quote in middle/end
+    assert note_service.sanitize_title("# Restriction to Digital Computers as 'Thinking Machines\"") == "Restriction to Digital Computers as 'Thinking Machines'"
+    assert note_service.sanitize_title("3. Restriction to Digital Computers as 'Thinking Machines") == "3. Restriction to Digital Computers as 'Thinking Machines'"
+    # Preserves natural internal apostrophes
+    assert note_service.sanitize_title("# Turing's Imitation Game") == "Turing's Imitation Game"
+    assert note_service.sanitize_title("# Gödel's Incompleteness Theorem") == "Gödel's Incompleteness Theorem"
+    # Strips wrapping quotes around whole title
+    assert note_service.sanitize_title("# 'Atomic Note'") == "Atomic Note"
+    assert note_service.sanitize_title('# "Atomic Note"') == "Atomic Note"
+    # Strips stray leading or trailing quotes
+    assert note_service.sanitize_title("# 'Atomic Note") == "Atomic Note"
+    assert note_service.sanitize_title("# Atomic Note'") == "Atomic Note"
+    # Preserves plural possessives
+    assert note_service.sanitize_title("# Students' Union") == "Students' Union"
+    # Balanced quotes with internal apostrophe
+    assert note_service.sanitize_title("# Turing's 'Thinking Machines'") == "Turing's 'Thinking Machines'"
+    assert note_service.sanitize_title("# Turing's 'Thinking Machines") == "Turing's 'Thinking Machines'"
+
+
+
 def test_app_state_listeners():
     state = AppState(theme_mode="Dark", auto_save=True)
     events = []

@@ -30,17 +30,33 @@ import pdf_processor
 from logger import log_debug, log_error
 
 
+def _normalize_tokens(text: str) -> List[str]:
+    """Extracts canonical word stems from text, stripping leading articles."""
+    s = re.sub(r'^(?:the|a|an)\s+', '', text.strip(), flags=re.IGNORECASE)
+    words = re.findall(r'\b\w+\b', s.casefold())
+    stemmed = []
+    for w in words:
+        if len(w) > 3 and w.endswith('ies'):
+            stemmed.append(w[:-3] + 'y')
+        elif len(w) > 3 and w.endswith('s') and not w.endswith('ss'):
+            stemmed.append(w[:-1])
+        else:
+            stemmed.append(w)
+    return stemmed
+
+
 def _resolve_target_id(
     target_title_raw: str,
     batch_title_to_id: Dict[str, str],
     global_title_to_id: Dict[str, str]
 ) -> Optional[str]:
     """
-    Resolves connection targets using strict matching ONLY to prevent false knowledge graph links:
-    1. Direct exact match (verbatim title)
-    2. Sanitized exact match (markdown # stripped)
-    3. Case-folded / whitespace-trimmed exact match
-    Never uses fuzzy or substring guessing to prevent hallucinated graph edges.
+    Resolves connection targets using disciplined hierarchical matching to prevent false graph links:
+    1. Direct exact match (verbatim title or sanitized title)
+    2. Case-folded exact match (case-insensitive exact)
+    3. Article-stripped exact match (e.g. 'The Argument...' <-> 'Argument...')
+    4. Token-level morphological 1-to-1 match (same word count >= 2, matching stems e.g. Computers <-> Computer)
+    Never uses substring guessing to prevent false knowledge graph edges.
     """
     if not target_title_raw or not isinstance(target_title_raw, str):
         return None
@@ -72,6 +88,32 @@ def _resolve_target_id(
     for title, nid in global_title_to_id.items():
         if title and (title.casefold() == target_folded or title.casefold() == sanitized_folded):
             return nid
+
+    # 3. Article-stripped exact match (e.g. 'The Argument from Consciousness' <-> 'Argument from Consciousness')
+    target_no_art = re.sub(r'^(the|a|an)\s+', '', target_folded, flags=re.IGNORECASE).strip()
+    sanitized_no_art = re.sub(r'^(the|a|an)\s+', '', sanitized_folded, flags=re.IGNORECASE).strip()
+
+    for title, nid in batch_title_to_id.items():
+        if title:
+            title_no_art = re.sub(r'^(the|a|an)\s+', '', title.casefold(), flags=re.IGNORECASE).strip()
+            if title_no_art == target_no_art or title_no_art == sanitized_no_art:
+                return nid
+
+    for title, nid in global_title_to_id.items():
+        if title:
+            title_no_art = re.sub(r'^(the|a|an)\s+', '', title.casefold(), flags=re.IGNORECASE).strip()
+            if title_no_art == target_no_art or title_no_art == sanitized_no_art:
+                return nid
+
+    # 4. Token-level morphological 1-to-1 match (same word count >= 2, matching stems e.g. Computers <-> Computer)
+    target_tokens = _normalize_tokens(raw_clean)
+    if target_tokens and len(target_tokens) >= 2:
+        for title, nid in batch_title_to_id.items():
+            if title and _normalize_tokens(title) == target_tokens:
+                return nid
+        for title, nid in global_title_to_id.items():
+            if title and _normalize_tokens(title) == target_tokens:
+                return nid
 
     return None
 
@@ -386,6 +428,32 @@ class AiNoteGeneratorWorker:
             links_to_insert = []
             now = datetime.now().isoformat()
 
+            # Canonical mapping from ID to exact sanitized database title
+            id_to_canonical_title = {}
+            for t, nid in title_to_id.items():
+                id_to_canonical_title[nid] = t
+            for nd in generated_notes:
+                if isinstance(nd, dict) and '_final_id' in nd:
+                    id_to_canonical_title[nd['_final_id']] = nd.get('_final_title', '')
+
+            # Synchronize batch connections bidirectionally (Folgezettel) so both parent and child reference each other
+            note_by_id = {nd['_final_id']: nd for nd in generated_notes if isinstance(nd, dict) and '_final_id' in nd}
+            for nd in generated_notes:
+                if not isinstance(nd, dict) or '_final_id' not in nd:
+                    continue
+                final_id = nd['_final_id']
+                src_title = nd.get('_final_title', '')
+                for target_title_raw in list(nd.get('connections', [])):
+                    if not isinstance(target_title_raw, str):
+                        continue
+                    target_id = _resolve_target_id(target_title_raw, batch_title_to_id, title_to_id)
+                    if target_id and target_id in note_by_id and target_id != final_id:
+                        tgt_note = note_by_id[target_id]
+                        if 'connections' not in tgt_note or not isinstance(tgt_note['connections'], list):
+                            tgt_note['connections'] = []
+                        if src_title and src_title not in tgt_note['connections']:
+                            tgt_note['connections'].append(src_title)
+
             for note_data in generated_notes:
                 if not isinstance(note_data, dict):
                     continue
@@ -395,13 +463,8 @@ class AiNoteGeneratorWorker:
                 content = note_data.get('content', '')
                 collection = note_data.get('general_title', 'AI Generated')
 
-                full_content = f"# {final_title}\n\n{content}"
-
-                notes_to_insert.append(
-                    (final_id, final_title, full_content, collection, now, now)
-                )
-
                 connections = note_data.get('connections', [])
+                valid_conn_titles = []
                 if isinstance(connections, list):
                     for target_title_raw in connections:
                         if not isinstance(target_title_raw, str):
@@ -412,8 +475,22 @@ class AiNoteGeneratorWorker:
                             link_pair = (final_id, target_id)
                             if link_pair not in links_to_insert:
                                 links_to_insert.append(link_pair)
+                            # Use canonical resolved title so wikilinks match the target note exactly
+                            canonical_title = id_to_canonical_title.get(target_id, target_title_raw.strip())
+                            if canonical_title and canonical_title not in valid_conn_titles:
+                                valid_conn_titles.append(canonical_title)
                         elif not target_id:
                             log_debug(f"DEBUG: Could not find target_id for '{target_title_raw}'. Link not inserted.")
+
+                if valid_conn_titles and "[[" not in content:
+                    wikilinks_md = "\n\n## Related Notes\n" + "\n".join(f"- [[{t}]]" for t in valid_conn_titles)
+                    full_content = f"# {final_title}\n\n{content}{wikilinks_md}"
+                else:
+                    full_content = f"# {final_title}\n\n{content}"
+
+                notes_to_insert.append(
+                    (final_id, final_title, full_content, collection, now, now)
+                )
 
             # Check for cancellation before DB commit
             if self._cancel_event.is_set():

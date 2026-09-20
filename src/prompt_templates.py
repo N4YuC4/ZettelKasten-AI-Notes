@@ -17,7 +17,9 @@ SYSTEM_INSTRUCTION_EXTRACTION = (
     "causal logic, nuances, and specific details of each idea in full depth. "
     "When explaining scientific, mathematical, or technical concepts, use rigorous LaTeX notation, clean structured bullet points, "
     "and display math blocks ($$ ... $$) for standalone equations to ensure high legibility and typographical elegance. "
+    "After all notes are fully written, record natural structural dependencies (Folgezettel) in a top-level 'links' array using integer note IDs (id), while keeping standalone definitions unlinked. "
     "Output must be a valid JSON object. "
+    "Never re-extract or paraphrase existing concepts under altered titles across sections; each note must represent a genuinely novel concept. "
     "Always generate all titles, contents, and collections in the exact same language as the source text."
 )
 
@@ -45,7 +47,9 @@ def build_chained_context_block(
         context_sections.append(f'DOCUMENT TOPIC: "{unified_general_title}"')
     if existing_titles:
         titles_list_str = ", ".join(f'"{t}"' for t in existing_titles)
-        context_sections.append(f"EXISTING TITLES (DO NOT DUPLICATE):\n[{titles_list_str}]")
+        context_sections.append(
+            f"EXISTING TITLES (STRICTLY FORBIDDEN TO RE-EXTRACT OR PARAPHRASE):\n[{titles_list_str}]"
+        )
     if previous_notes_json:
         context_sections.append(f"PREVIOUS NOTES (REFERENCE):\n```json\n{previous_notes_json}\n```")
 
@@ -101,14 +105,15 @@ RULES AND GUIDELINES:
 
 1. CONCEPTUAL ANALYSIS & DELIBERATION (REASONING):
    - Before generating atomic notes, deliberate and formulate your reasoning inside 'conceptual_analysis':
-     * 'core_thesis': Articulate the overarching thesis, theoretical foundation, and central argument of the document.
-     * 'atomic_breakdown': Plan the discrete conceptual boundaries—identify which specific concepts must be separated into independent atomic notes without overlap.
+     * 'core_thesis': Articulate the overarching thesis, theoretical foundation, and central argument of the document in 2-3 concise sentences.
+     * 'atomic_breakdown': Plan discrete conceptual boundaries as a concise list (3-7 concept names) to be extracted into notes without overlap.
+   - Keep 'conceptual_analysis' focused and brief to preserve maximum generation token budget for the atomic notes themselves.
    - Express all analytical deliberation exclusively inside this JSON object. Do not output any commentary or tags outside the JSON.
-   - Focus purely on understanding the text and formulating atomic notes. (Do not concern yourself with graph linking or note connections in this extraction stage).
 
 2. STRICT LANGUAGE MATCHING:
    - Output all 'general_title', 'conceptual_analysis', 'title', and 'content' in the EXACT SAME LANGUAGE as the source document.
    - NEVER MIX LANGUAGES: If the document is in English, every title, collection, and content MUST be in English. If the document is in Turkish, everything MUST be in Turkish.
+   - CRITICAL WARNING ON LANGUAGE BIAS: The few-shot JSON example provided below is written in English strictly to illustrate JSON schema formatting and KaTeX mathematical styling. You MUST NOT switch to or use English if the source text is in another language (such as Turkish). Always generate all titles, concepts, and note bodies in the authentic language of the source document.
 
 3. ATOMIC ZETTELKASTEN NOTES:
    - ATOMIC SCOPE: Each note represents ONE specific concept, definition, mechanism, or argument. Never merge multiple disparate concepts into one note. If the text covers multiple sub-mechanisms or concepts, create separate atomic notes for each.
@@ -128,15 +133,24 @@ RULES AND GUIDELINES:
    - 'content': Complete, self-contained, deeply articulated explanation of the concept in the document's language adhering to the content structure above.
 {collection_rule}
 
-4. DEDICATED NEW NOTES (NO DUPLICATES):
-   - Do NOT duplicate or summarize notes that already exist in previous sections. Only extract new, distinct concepts.
+4. NATURAL STRUCTURAL BRANCHING & LINKS (FOLGEZETTEL):
+   - Only AFTER all notes are completely written in 'notes', specify authentic structural relationships in a top-level 'links' array using the integer note IDs ('source' and 'target').
+   - Link sub-components to their architectural system (e.g., Note 2 belongs to Note 1: {{"source": 1, "target": 2}}), direct objections to the premises they critique, or sequential mechanisms.
+   - If notes in this chunk are independent definitions or axioms with no structural dependency between them, provide an empty list: "links": []. Never invent forced or artificial connections.
+
+5. DEDICATED NEW NOTES (NO DUPLICATES) & STRICT CONCEPT DEDUPLICATION:
+   - Do NOT re-extract, summarize, or re-explain concepts that were already covered in PREVIOUS NOTES (REFERENCE) or listed in EXISTING TITLES.
+   - NEVER bypass deduplication by creating slight variations or paraphrased synonyms of existing titles (e.g., creating 'X Setup' when 'X Structure' already exists, or 'Y Overview' when 'Y' is established).
+   - If the text in this chunk mentions or builds upon an existing concept, refer to it in 'relationship_logic' or 'links', but do NOT generate a new note for that already-covered concept.
+   - NOTE ON SECTION OVERLAP: The beginning of this text may contain a brief sentence overlap from the preceding section to maintain narrative continuity. Do NOT extract notes from repeated introductory text if the underlying concept was already extracted in previous sections.
+   - Only extract genuine, distinct, and newly introduced concepts that appear for the first time in this text.
 
 JSON FORMAT:
 {{
   "general_title": "Document Topic",
   "conceptual_analysis": {{
-    "core_thesis": "Comprehensive articulation of the overarching thesis, foundational premise, and primary theoretical framework presented in the document.",
-    "atomic_breakdown": "Systematic breakdown of the distinct concepts to be extracted into individual atomic notes, defining clear thematic boundaries to prevent overlap."
+    "core_thesis": "Concise formulation of the overarching thesis, foundational premise, and theoretical framework (2-3 sentences).",
+    "atomic_breakdown": "1. Foundational state transition model. 2. Performance evaluation metrics."
   }},
   "notes": [
     {{
@@ -148,6 +162,12 @@ JSON FORMAT:
       "id": 2,
       "title": "Performance Evaluation Metrics",
       "content": "Detailed analysis of the quantitative evaluation framework employed to assess model fidelity and classification robustness. When evaluating imbalanced datasets, multi-criteria performance requires isolating specific diagnostic dimensions:\\n\\n- **Sensitivity (Recall)**: Measures the proportion of actual positives correctly identified: $\\frac{{\\text{{TP}}}}{{\\text{{TP}} + \\text{{FN}}}}$\\n- **Specificity**: Quantifies the true negative detection rate: $\\frac{{\\text{{TN}}}}{{\\text{{TN}} + \\text{{FP}}}}$\\n- **Matthews Correlation Coefficient (MCC)**:\\n  $$\\text{{MCC}} = \\frac{{\\text{{TP}} \\times \\text{{TN}} - \\text{{FP}} \\times \\text{{FN}}}}{{\\sqrt{{(\\text{{TP}} + \\text{{FP}})(\\text{{TP}} + \\text{{FN}})(\\text{{TN}} + \\text{{FP}})(\\text{{TN}} + \\text{{FN}})}}}}$$\\n\\nMCC is robust against severe class skew because it incorporates all four quadrants of the confusion matrix into an orthogonal correlation measure ranging from $-1$ to $+1$."
+    }}
+  ],
+  "links": [
+    {{
+      "source": 1,
+      "target": 2
     }}
   ]
 }}
@@ -174,11 +194,19 @@ Analyze all the notes and descriptions above holistically.
 Discover genuine conceptual links (such as prerequisite, complementary, cause-effect, or logical continuation) between notes using their integer note IDs ('id').
 
 RULES:
-1. DELIBERATE RELATIONSHIP LOGIC FIRST:
+1. DELIBERATE RELATIONSHIP LOGIC FIRST (CONCISE IN-JSON THINKING):
    - For each genuine connection, formulate the precise conceptual justification in 'relationship_logic' BEFORE specifying 'source' and 'target'. Explain why these two notes share a vital theoretical dependency, causal relationship, contrast, or functional complement.
+   - STRICT CONCISENESS & DENSITY: Express the reasoning strictly in ONE concise sentence (maximum 10-15 words). State directly the underlying theoretical link, prerequisite, or causal dependency without conversational filler (e.g., "Note 1 defines Beta convergence which Note 8 tests regionally.").
 2. The 'source' and 'target' fields MUST strictly contain the matching notes' integer 'id' values (1, 2, 3...).
 3. STRICTLY DIFFERENT IDS (NO SELF-LOOPS): 'source' and 'target' MUST be two DIFFERENT note IDs (source != target). NEVER link a note to itself (e.g., {{"source": 1, "target": 1}} is INVALID and FORBIDDEN).
-4. DO NOT FORCE CONNECTIONS: Only connect notes that share an authentic conceptual link. Standalone definitions or axioms may remain unconnected. If there are no links, return an empty array: {{"links": []}}.
+4. THOROUGH CROSS-SECTION BRIDGES (VERWEIS):
+   - Focus on discovering macro conceptual bridges between different sections, themes, or distant arguments (e.g., connecting a philosophical argument in Section 6 with a computational constraint defined in Section 3).
+   - Only establish links where an authentic conceptual relationship exists:
+     * Foundational dependencies and sequential continuations (e.g., Note B builds upon or elaborates the mechanism in Note A).
+     * Objections, critiques, and counter-arguments (e.g., philosophical or mathematical objections linked to the specific premises they dispute).
+     * Structural component relationships across sections (e.g., sub-units or modules linked to their overarching theoretical system).
+     * Analogies, comparative frameworks, and learning models.
+   - RESPECT STANDALONE NOTES: Do NOT create forced, artificial, or superficial connections just to link every note. If a note is a self-contained definition, axiom, or historical aside that does not directly interface with other notes, leave it unlinked.
 5. Avoid duplicate bidirectional links (if 1 -> 2 is established, do not also write 2 -> 1).
 6. STRICT JSON OUTPUT:
    - Output ONLY the JSON object with the 'links' array containing 'relationship_logic', 'source', and 'target'.
@@ -188,11 +216,11 @@ FEW-SHOT EXAMPLE:
 {{
   "links": [
     {{
-      "relationship_logic": "Note 1 establishes the foundational theoretical axiom upon which the operational mechanism in Note 2 is constructed.",
+      "relationship_logic": "Note 1 establishes the theoretical axiom operationalized in Note 2.",
       "source": 1, "target": 2
     }},
     {{
-      "relationship_logic": "Note 2 specifies the primary algorithmic pipeline whose failure states and mathematical boundaries are analyzed in Note 4.",
+      "relationship_logic": "Note 2 specifies the algorithm whose boundary conditions are analyzed in Note 4.",
       "source": 2, "target": 4
     }}
   ]

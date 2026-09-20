@@ -9,6 +9,7 @@ from env_config import configure_headless_environment
 
 configure_headless_environment()
 
+import math
 import re
 import gc
 import time
@@ -25,6 +26,7 @@ from prompt_templates import (
     build_graph_linking_prompt,
 )
 from ai_provider import BaseAiProvider
+import semantic_chunker
 
 
 class LocalModelNotFoundError(Exception):
@@ -235,67 +237,22 @@ class LocalGgufClient(BaseAiProvider):
         # Conservative estimate for Turkish and multilingual prose (~3.0 chars per token)
         return max(1, int(len(text) / 3.0) + 1)
 
-    def _chunk_text(self, text: str, max_chunk_tokens: int, overlap_tokens: int = 250) -> List[str]:
+    def _chunk_text(
+        self,
+        text: str,
+        max_chunk_tokens: int = semantic_chunker.DEFAULT_EXTRACTION_CHUNK_TOKENS,
+        overlap_tokens: int = semantic_chunker.DEFAULT_OVERLAP_TOKENS
+    ) -> List[str]:
         """
-        Splits text into coherent semantic chunks that each fit within max_chunk_tokens.
-        Preserves paragraph and sentence boundaries.
+        Universal dynamic chunker: splits text into balanced, coherent semantic chunks.
+        Delegates to shared semantic_chunker.chunk_text using model tokenizer for accurate counts.
         """
-        if not text or self._count_tokens(text) <= max_chunk_tokens:
-            return [text] if text else []
-
-        raw_paragraphs = text.split("\n\n")
-        paragraphs = []
-        for p in raw_paragraphs:
-            p = p.strip()
-            if not p:
-                continue
-            p_tokens = self._count_tokens(p)
-            if p_tokens > max_chunk_tokens:
-                # Sub-split oversized paragraph by sentence endings
-                sentences = re.split(r'(?<=[.!?])\s+', p)
-                current_sub = ""
-                for s in sentences:
-                    if self._count_tokens((current_sub + " " + s).strip()) > max_chunk_tokens:
-                        if current_sub:
-                            paragraphs.append(current_sub.strip())
-                        current_sub = s
-                    else:
-                        current_sub = (current_sub + " " + s).strip()
-                if current_sub:
-                    paragraphs.append(current_sub.strip())
-            else:
-                paragraphs.append(p)
-
-        chunks = []
-        current_chunk_paragraphs: List[str] = []
-        current_chunk_tokens = 0
-
-        for p in paragraphs:
-            p_tokens = self._count_tokens(p)
-            if current_chunk_paragraphs and (current_chunk_tokens + p_tokens > max_chunk_tokens):
-                chunks.append("\n\n".join(current_chunk_paragraphs))
-
-                # Retain overlap paragraphs
-                overlap_paras: List[str] = []
-                overlap_toks = 0
-                for prev_p in reversed(current_chunk_paragraphs):
-                    prev_toks = self._count_tokens(prev_p)
-                    if overlap_toks + prev_toks <= overlap_tokens:
-                        overlap_paras.insert(0, prev_p)
-                        overlap_toks += prev_toks
-                    else:
-                        break
-
-                current_chunk_paragraphs = overlap_paras + [p]
-                current_chunk_tokens = overlap_toks + p_tokens
-            else:
-                current_chunk_paragraphs.append(p)
-                current_chunk_tokens += p_tokens
-
-        if current_chunk_paragraphs:
-            chunks.append("\n\n".join(current_chunk_paragraphs))
-
-        return chunks
+        return semantic_chunker.chunk_text(
+            text=text,
+            max_chunk_tokens=max_chunk_tokens,
+            overlap_tokens=overlap_tokens,
+            count_tokens_fn=self._count_tokens
+        )
 
     @staticmethod
     def _clean_connections(raw_connections: Any, current_title: str = "") -> List[str]:
@@ -328,14 +285,22 @@ class LocalGgufClient(BaseAiProvider):
             {"role": "user", "content": user_prompt}
         ]
 
-        log_debug(f"Executing local GGUF inference (input length: {len(chunk_text)} chars)...")
+        # Estimate prompt tokens and dynamically calculate safe max_tokens so we do not exceed n_ctx
+        prompt_tokens = self._count_tokens(user_prompt) + 300
+        remaining_ctx = max(512, self.n_ctx - prompt_tokens - 100)
+        safe_max_tokens = min(4096, remaining_ctx)
+
+        log_debug(f"Executing local GGUF inference (input length: {len(chunk_text)} chars, max_tokens: {safe_max_tokens})...")
 
         try:
+            # Omit response_format={"type": "json_object"} to eliminate CPU BNF grammar parsing
+            # which degrades GPU generation speed by ~85%. AiResponseParser handles JSON recovery.
             response = self.llm.create_chat_completion(
                 messages=messages,
-                response_format={"type": "json_object"},
                 temperature=0.2,
-                max_tokens=4096,
+                repeat_penalty=1.1,
+                top_p=0.95,
+                max_tokens=safe_max_tokens,
             )
         except Exception as e:
             log_error(f"Local LLM inference failed: {e}\n{traceback.format_exc()}")
@@ -396,7 +361,10 @@ class LocalGgufClient(BaseAiProvider):
         safety_margin = 250
         previous_json_budget = 2500
         safe_ctx_budget = max(1024, self.n_ctx - max_output_tokens - system_overhead_tokens - safety_margin - previous_json_budget)
-        max_prompt_tokens = safe_ctx_budget
+
+        # Enforce universal safe chunk ceiling: balances depth with token budget
+        MAX_SAFE_EXTRACTION_CHUNK_TOKENS = semantic_chunker.DEFAULT_EXTRACTION_CHUNK_TOKENS
+        max_prompt_tokens = min(safe_ctx_budget, MAX_SAFE_EXTRACTION_CHUNK_TOKENS)
 
         total_tokens = self._count_tokens(sanitized_text)
         log_debug(
@@ -415,7 +383,11 @@ class LocalGgufClient(BaseAiProvider):
             f"Document size (~{total_tokens} tokens) exceeds single-pass budget ({max_prompt_tokens} tokens). "
             "Splitting document into semantic chunks with chained context..."
         )
-        chunks = self._chunk_text(sanitized_text, max_chunk_tokens=max_prompt_tokens, overlap_tokens=250)
+        chunks = self._chunk_text(
+            sanitized_text,
+            max_chunk_tokens=max_prompt_tokens,
+            overlap_tokens=semantic_chunker.DEFAULT_OVERLAP_TOKENS
+        )
         log_debug(f"Document split into {len(chunks)} chunks for sequential chained processing.")
 
         all_notes: List[Dict[str, Any]] = []
@@ -453,37 +425,33 @@ class LocalGgufClient(BaseAiProvider):
                         all_notes.append(note)
                         new_chunk_notes.append(note)
 
-                # Prepare previous_chunk_json for the subsequent chunk
+                # Prepare previous_chunk_json for the subsequent chunk (pure concept reference: id, title, brief content)
+                # Never include 'connections' or link arrays to prevent prompt leakage and phantom linking hallucinations
                 if new_chunk_notes:
+                    ref_notes = [
+                        {
+                            "id": n.get("id", i + 1),
+                            "title": n.get("title", ""),
+                            "content": (n.get("content", "")[:250] + "...") if len(n.get("content", "")) > 250 else n.get("content", "")
+                        }
+                        for i, n in enumerate(new_chunk_notes)
+                        if n.get("title")
+                    ]
                     clean_export = {
                         "general_title": unified_general_title or "",
-                        "notes": new_chunk_notes
+                        "notes": ref_notes
                     }
-                    json_str = json.dumps(clean_export, ensure_ascii=False, indent=2)
-                    if self._count_tokens(json_str) > previous_json_budget:
-                        # Compact note content if it exceeds token budget
-                        compact_notes = [
-                            {
-                                "title": n.get("title", ""),
-                                "content": (n.get("content", "")[:250] + "...") if len(n.get("content", "")) > 250 else n.get("content", ""),
-                                "connections": n.get("connections", [])
-                            }
-                            for n in new_chunk_notes
-                        ]
-                        json_str = json.dumps({
-                            "general_title": unified_general_title or "",
-                            "notes": compact_notes
-                        }, ensure_ascii=False, indent=2)
-                    previous_chunk_json = json_str
+                    previous_chunk_json = json.dumps(clean_export, ensure_ascii=False, indent=2)
 
             except Exception as ce:
                 log_error(f"Error processing chunk {idx + 1}/{len(chunks)}: {ce}")
                 if not all_notes and idx == len(chunks) - 1:
                     raise
 
-        # Guarantee that all notes from the same document share the exact same overarching collection
-        if unified_general_title:
-            for note in all_notes:
+        # Guarantee sequential global 1-based unique IDs across all chunks
+        for idx, note in enumerate(all_notes):
+            note["id"] = idx + 1
+            if unified_general_title:
                 note["general_title"] = unified_general_title
 
         return all_notes
@@ -521,9 +489,10 @@ class LocalGgufClient(BaseAiProvider):
             if n.get("title")
         ]
 
-        # Safety boundary: if an immense document exceeds 24k tokens, compact content slightly
+        # Dynamic prompt budget calculation adapted to self.n_ctx
         notes_json_str = json.dumps(full_notes_payload, ensure_ascii=False, indent=2)
-        if self._count_tokens(notes_json_str) > 24000:
+        safe_prompt_budget = max(2048, self.n_ctx - 4096 - 500)
+        if self._count_tokens(notes_json_str) > safe_prompt_budget:
             full_notes_payload = [
                 {
                     "id": idx + 1,
@@ -541,13 +510,21 @@ class LocalGgufClient(BaseAiProvider):
             {"role": "user", "content": user_prompt}
         ]
 
+        # Calculate safe max_tokens allowing deep relationship reasoning across all notes without truncation
+        prompt_tokens = self._count_tokens(user_prompt) + 200
+        remaining_ctx = max(4096, self.n_ctx - prompt_tokens - 100)
+        safe_max_tokens = min(8192, remaining_ctx)
+        log_debug(
+            f"Stage 2 linking budget: n_ctx={self.n_ctx}, prompt_tokens={prompt_tokens}, "
+            f"remaining_ctx={remaining_ctx}, safe_max_tokens={safe_max_tokens}"
+        )
+
         try:
             response = self.llm.create_chat_completion(
                 messages=messages,
-                response_format={"type": "json_object"},
                 temperature=0.2,
-                repeat_penalty=1.15,
-                max_tokens=512,
+                repeat_penalty=1.05,
+                max_tokens=safe_max_tokens,
             )
             raw_content = response["choices"][0]["message"].get("content", "") if response and "choices" in response else ""
             log_debug(f"Stage 2 linking response received (len={len(raw_content)} chars): {raw_content[:400]}")
