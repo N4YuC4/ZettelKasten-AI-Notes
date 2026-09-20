@@ -23,6 +23,7 @@ A powerful, privacy-first desktop knowledge management system implementing the *
 * **Offline Local AI (GGUF via Vulkan)**: 100% offline, privacy-first local inference powered by `llama-cpp-python` with cross-vendor **Vulkan GPU acceleration** (AMD, NVIDIA, Intel, Apple Silicon).
 * **Process-Isolated Execution**: Local inference runs inside an isolated `multiprocessing` worker. This prevents GUI thread deadlocks with Wayland/Vulkan presentation hooks, ensures a 100% responsive UI during heavy computation, and guarantees immediate RAM/VRAM reclamation upon completion or cancellation.
 * **Intelligent Response Parsing (`AiResponseParser`)**: Robust multi-strategy JSON extraction that sanitizes connections, cleans citations (`[1]`, `[Smith et al.]`), ignores structural markers (Figure, Table, Section, Clause), and repairs malformed LLM responses.
+* **Dynamic Semantic Chunking (`semantic_chunker.py`)**: Universal dynamic chunker shared between Cloud and Local AI. Automatically splits long PDF extractions along semantic paragraph, sentence, and word boundaries with adaptive token overlap (~4500 tokens default) to prevent context truncation and ensure coherent note synthesis.
 
 ### 📦 In-App Model Manager & Downloader
 * **Curated Model Catalog (`local_models_catalog.py`)**:
@@ -65,10 +66,10 @@ A powerful, privacy-first desktop knowledge management system implementing the *
 * **Collapsible Narrow Rails**: Minimize the left sidebar (`Ctrl+[`) or right panel (`Ctrl+]`) into compact 50px icon rails to maximize writing area.
 * **Draggable Splitters**: Drag vertical and horizontal splitter handles to customize pane proportions.
 
-### 💾 Robust SQLite Persistence (`database_manager.py`)
-* Local storage in `db/notes.db` configured with **Write-Ahead Logging (WAL)** mode for fast, non-blocking concurrent reads and writes.
-* Thread-safe access via thread-local connections (`DatabaseManager._local.conn`).
-* Enforced foreign key integrity (`PRAGMA foreign_keys = ON`) with cascading deletes.
+### 💾 Robust SQLite Persistence & Privacy (`database_manager.py` & `settings_manager.py`)
+* **Local Note Storage (`db/notes.db`)**: Configured with **Write-Ahead Logging (WAL)** mode for fast, non-blocking concurrent reads and writes, thread-local connections (`DatabaseManager._local.conn`), and enforced foreign keys (`PRAGMA foreign_keys = ON`) with cascading deletes.
+* **Dedicated Settings Repository (`db/settings.db`)**: Manages UI state, AI preferences, and API secrets locally with isolated connections and factory reset capability.
+* **100% Privacy & Zero Data Leakage**: All databases (`db/`) and rotating application logs (`logs/`) are strictly git-ignored via `.gitignore`. Your personal notes, local AI preferences, and API keys reside exclusively on your machine and are never tracked in version control.
 
 ---
 
@@ -93,10 +94,12 @@ The codebase is designed with clean architecture and SOLID principles, strictly 
    ├────────────────────┤                                         ├─────────────────────┤
    │ SidebarView        │                                         │ NoteService         │
    │ EditorWorkspaceView│                                         │ DatabaseManager     │
-   │ RightPanelView     │                                         │ HardwareChecker     │
-   │ DialogManager      │                                         │ ModelDownloader     │
-   │ Splitters          │                                         │ PdfProcessor        │
-   └────────────────────┘                                         └──────────┬──────────┘
+   │ RightPanelView     │                                         │ SettingsManager     │
+   │ DialogManager      │                                         │ HardwareChecker     │
+   │ Splitters          │                                         │ ModelDownloader     │
+   └────────────────────┘                                         │ PdfProcessor        │
+                                                                  │ SemanticChunker     │
+                                                                  └──────────┬──────────┘
                                                                              │
                                                                ┌─────────────▼────────────┐
                                                                │  BaseAiProvider Factory  │
@@ -172,7 +175,7 @@ pip install -r requirements.txt
 #### Option A: Using Google Gemini (Cloud AI)
 1. Obtain an API key from [Google AI Studio](https://aistudio.google.com/).
 2. Launch the application and configure the API key directly in the in-app **Settings (`⚙️`) -> AI Settings -> Gemini API Key**.
-3. The key and all application preferences are stored locally and securely in `db/settings.db`.
+3. The key and all application preferences are stored locally and securely in `db/settings.db` (git-ignored to ensure API keys and settings are never committed to version control).
 
 #### Option B: Using Local GGUF Models (Offline AI)
 1. Launch the application.
@@ -224,8 +227,10 @@ Zettelkasten-AI-Notes/
 │   ├── note_manager.py             # Backward-compatible note manager adapter
 │   ├── note_service.py             # Core business logic (CRUD, sanitization, LaTeX, wikilinks)
 │   ├── pdf_processor.py            # PDF text extraction and document chunking
-│   └── prompt_templates.py         # Structured Zettelkasten extraction prompt templates
-├── tests/                          # Automated pytest suite (181 tests across 16 files)
+│   ├── prompt_templates.py         # Structured Zettelkasten extraction prompt templates
+│   ├── semantic_chunker.py         # Universal dynamic semantic text chunker (sentence & paragraph boundary balancing)
+│   └── settings_manager.py         # Dedicated SQLite configuration repository (db/settings.db)
+├── tests/                          # Automated pytest suite (212 tests across 18 files)
 │   ├── test_ai_provider.py
 │   ├── test_ai_response_parser.py
 │   ├── test_ai_worker_and_pdf.py
@@ -241,11 +246,22 @@ Zettelkasten-AI-Notes/
 │   ├── test_model_downloader.py
 │   ├── test_models_and_service.py
 │   ├── test_note_manager.py
+│   ├── test_semantic_chunker.py
+│   ├── test_settings_manager.py
 │   └── test_ui_components.py
 ├── requirements.txt                # Project dependencies
 ├── LICENSE                         # GNU General Public License v3.0
 └── README.md                       # Project documentation
 ```
+
+### 🔒 Data Privacy & Git-Ignored Runtime Files
+In strict compliance with [`.gitignore`](.gitignore), private user data, runtime databases, local configuration secrets, and development artifacts are decoupled from version control and never tracked:
+* `db/` — SQLite databases (`notes.db`, `settings.db`, WAL and SHM files). Automatically initialized on first launch.
+* `logs/` — Centralized rotating application debug logs (`debug.log`).
+* `docs/` — Local design documents, architecture notes, and feature roadmaps.
+* `.venv/` — Dedicated Python 3.13 virtual environment.
+* `.env` — Legacy environment secrets (superseded by SQLite `settings.db`).
+* `AGENTS.md` — AI assistant context instructions and persistent project guidelines.
 
 ---
 
@@ -254,7 +270,7 @@ Zettelkasten-AI-Notes/
 The project includes an extensive automated test suite covering domain logic, UI view controls, AI parsers, SQLite transactions, and hardware detection:
 
 ```bash
-# Run the entire test suite (181 tests):
+# Run the entire test suite (212 tests):
 ./.venv/bin/pytest
 
 # Run tests with verbose output:
@@ -264,7 +280,7 @@ The project includes an extensive automated test suite covering domain logic, UI
 ./.venv/bin/pytest tests/test_markdown_editor.py
 ```
 
-All **190 tests** execute and pass in ~2 seconds.
+All **212 tests** execute and pass in ~7-8 seconds.
 
 ---
 
