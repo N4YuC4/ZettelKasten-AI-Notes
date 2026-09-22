@@ -236,3 +236,42 @@ def test_sqlite_category_to_collection_migration(tmp_path):
         assert db.get_note("legacy-1") is None
     finally:
         db.close_connection()
+
+
+def test_note_embeddings_crud(temp_db):
+    import numpy as np
+
+    temp_db.insert_note("emb-1", "Embedding Note 1", "Content 1", "AI")
+    temp_db.insert_note("emb-2", "Embedding Note 2", "Content 2", "AI")
+
+    v1 = np.random.randn(1024).astype(np.float32)
+    v2 = np.random.randn(1024).astype(np.float32)
+
+    temp_db.save_note_embeddings({"emb-1": v1, "emb-2": v2}, model_id="harrier-oss-v1-0.6b")
+
+    # Retrieve single
+    read_v1 = temp_db.get_note_embedding("emb-1")
+    assert read_v1 is not None
+    assert len(read_v1) == 1024
+    assert np.allclose(read_v1, v1)
+
+    # Retrieve all
+    all_embs = temp_db.get_all_note_embeddings()
+    assert len(all_embs) == 2
+    assert "emb-1" in all_embs
+    assert "emb-2" in all_embs
+
+    # Model specific retrieve
+    m_embs = temp_db.get_all_note_embeddings(model_id="harrier-oss-v1-0.6b")
+    assert len(m_embs) == 2
+    non_embs = temp_db.get_all_note_embeddings(model_id="non-existent-model")
+    assert len(non_embs) == 0
+
+    # Delete note cascades to embedding
+    temp_db.delete_note("emb-1")
+    assert temp_db.get_note_embedding("emb-1") is None
+
+    # Delete embeddings directly
+    temp_db.delete_note_embeddings(["emb-2"])
+    assert temp_db.get_note_embedding("emb-2") is None
+

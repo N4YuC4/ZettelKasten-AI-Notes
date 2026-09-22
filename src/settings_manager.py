@@ -125,6 +125,8 @@ class SettingsManager:
             "AI_CUSTOM_SYSTEM_PROMPT": "",
             "CUSTOM_DB_PATH": "",
             "GEMINI_API_KEY": "",
+            "EMBEDDING_MODEL_ID": local_models_catalog.DEFAULT_EMBEDDING_MODEL_ID,
+            "EMBEDDING_SIMILARITY_THRESHOLD": "0.65",
         }
 
     def reset_to_defaults(self) -> None:

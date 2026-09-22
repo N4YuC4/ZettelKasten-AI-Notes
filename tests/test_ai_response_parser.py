@@ -194,6 +194,25 @@ def test_prompt_templates_generation():
     assert "THOROUGH CROSS-SECTION BRIDGES (VERWEIS)" in linking_prompt
     assert "RESPECT STANDALONE NOTES" in linking_prompt
 
+    # Test candidate pairs verification prompt
+    from prompt_templates import build_candidate_pairs_verification_prompt
+    pairs = [(1, 14, 0.85), (1, 86, 0.72)]
+    notes_map = {
+        1: {"title": "Note 1", "content": "Content 1"},
+        14: {"title": "Note 14", "content": "Content 14"},
+        86: {"title": "Note 86", "content": "Content 86"},
+        99: {"title": "Unrelated Note", "content": "Should not appear"}
+    }
+    batch_prompt = build_candidate_pairs_verification_prompt(pairs, notes_map)
+    assert "<candidate_notes>" in batch_prompt
+    assert "<pairs_to_evaluate>" in batch_prompt
+    assert "Note 1" in batch_prompt
+    assert "Note 14" in batch_prompt
+    assert "Note 86" in batch_prompt
+    assert "Unrelated Note" not in batch_prompt
+    assert "Score: 0.85" in batch_prompt
+    assert "Score: 0.72" in batch_prompt
+
 
 
 def test_parse_notes_json_with_conceptual_analysis_and_internal_think_tags():
@@ -497,6 +516,101 @@ def test_build_chained_context_block_and_prompt_strict_deduplication():
     assert "NOTE ON SECTION OVERLAP" in prompt
     assert "DEDICATED NEW NOTES (NO DUPLICATES)" in prompt
     assert "Never re-extract or paraphrase existing concepts under altered titles across sections" in SYSTEM_INSTRUCTION_EXTRACTION
+
+
+def test_contrastive_candidate_audit_and_section_echo_prompt():
+    prompt = build_note_extraction_prompt(
+        chunk_text="Regional convergence testing with Swamy RCM model.",
+        existing_titles=["Beta Convergence", "Swamy Random Coefficients Model"],
+        unified_general_title="Regional Economics"
+    )
+    # 1. Verify contrastive deliberation and candidate audit clauses
+    assert "CONCEPTUAL ANALYSIS & CONTRASTIVE AUDIT" in prompt
+    assert "candidate_audit" in prompt
+    assert "Criterion of Distinctness" in prompt
+    assert "Criterion of Redundancy (Section-Echo)" in prompt
+    assert "PURE CONCEPTUAL TITLES" in prompt
+    assert "ACADEMIC SECTION-ECHO RULE" in prompt
+    assert "PERMISSION TO OMIT (EMPTY NOTES ALLOWED)" in prompt
+
+    # 2. Verify AiResponseParser parses responses containing candidate_audit without issues
+    mock_llm_json = """
+    {
+      "general_title": "Regional Economics",
+      "conceptual_analysis": {
+        "core_thesis": "Analyzes regional convergence using empirical econometric modeling.",
+        "candidate_audit": [
+          {
+            "candidate": "Conditional Beta Convergence",
+            "contrast_with_existing": "Distinct model with structural variables.",
+            "status": "APPROVED"
+          },
+          {
+            "candidate": "Swamy RCM Definition",
+            "contrast_with_existing": "Redundant echo of established model.",
+            "status": "REJECTED_DUPLICATE"
+          }
+        ],
+        "atomic_breakdown": "1. Conditional Beta Convergence."
+      },
+      "notes": [
+        {
+          "id": 1,
+          "title": "Conditional Beta Convergence",
+          "content": "Deep analysis of conditional convergence conditioned on investment ratios.",
+          "connections": ["Beta Convergence"]
+        }
+      ]
+    }
+    """
+    parsed = AiResponseParser.parse_notes_json(mock_llm_json)
+    assert len(parsed) == 1
+    assert parsed[0]["title"] == "Conditional Beta Convergence"
+    assert parsed[0]["connections"] == ["Beta Convergence"]
+
+
+def test_empty_notes_array_does_not_create_untitled_notes_from_conceptual_analysis():
+    # When a chunk deliberately returns "notes": [] (omission permission),
+    # the parser must return [] and NOT convert conceptual_analysis into an Untitled Note.
+    empty_notes_json = """
+    {
+      "general_title": "Regional Economics",
+      "conceptual_analysis": {
+        "core_thesis": "Document analyzes econometric convergence.",
+        "candidate_audit": [
+          {
+            "candidate": "Beta Convergence",
+            "contrast_with_existing": "Already in vault.",
+            "status": "REJECTED_DUPLICATE"
+          }
+        ],
+        "atomic_breakdown": ""
+      },
+      "notes": []
+    }
+    """
+    notes = AiResponseParser.parse_notes_json(empty_notes_json)
+    assert notes == []
+
+
+def test_meta_syntax_placeholders_and_empty_notes_dropped():
+    # Verifies that raw meta-placeholders like <Concept Name> or empty content are dropped
+    raw_payload = """
+    {
+      "general_title": "Test",
+      "notes": [
+        {"id": 1, "title": "<Canonical name of concept>", "content": "Some content."},
+        {"id": 2, "title": "Valid Concept", "content": "Valid explanation."},
+        {"id": 3, "title": "Empty Note", "content": ""},
+        {"id": 4, "title": "Untitled Note", "content": "Some content."}
+      ]
+    }
+    """
+    notes = AiResponseParser.parse_notes_json(raw_payload)
+    assert len(notes) == 1
+    assert notes[0]["title"] == "Valid Concept"
+
+
 
 
 

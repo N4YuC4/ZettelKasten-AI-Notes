@@ -139,3 +139,70 @@ def test_mind_map_empty_notes_handled_cleanly():
     widget.update_map([], [])
     assert len(widget.notes) == 0
     assert len(widget.canvas.shapes) == 0
+
+def test_mind_map_edge_deduplication_and_no_arrowheads():
+    """
+    Verifies bidirectional links are deduplicated to a single clean line without arrowhead clutter,
+    and self-loops are ignored.
+    """
+    import flet.canvas as cv
+    widget = MindMapWidget(None, None)
+    widget.canvas.update = MagicMock()
+
+    notes = [
+        ("A", "Note Alpha", ""),
+        ("B", "Note Beta", "")
+    ]
+    # Bidirectional links + self-loop
+    links = [
+        ("A", "B"),
+        ("B", "A"),
+        ("A", "A")
+    ]
+    widget.update_map(notes, links)
+
+    # Filter canvas shapes for lines
+    line_shapes = [s for s in widget.canvas.shapes if isinstance(s, cv.Line)]
+    # With deduplication and no arrowheads, there must be exactly 1 line
+    assert len(line_shapes) == 1
+
+def test_mind_map_active_note_and_neighbor_highlighting():
+    """
+    Verifies active note incident edges and neighbor borders are highlighted with PRIMARY color.
+    """
+    import flet as ft
+    import flet.canvas as cv
+    widget = MindMapWidget(None, None)
+    widget.canvas.update = MagicMock()
+
+    notes = [
+        ("A", "Note Alpha", ""),
+        ("B", "Note Beta", ""),
+        ("C", "Note Gamma", "")
+    ]
+    links = [
+        ("A", "B"),
+        ("B", "A"),
+        ("B", "C"),
+        ("C", "B")
+    ]
+    # Select note A
+    widget.update_map(notes, links, current_note_id="A")
+
+    line_shapes = [s for s in widget.canvas.shapes if isinstance(s, cv.Line)]
+    assert len(line_shapes) == 2  # (A, B) and (B, C)
+
+    # Active edge (connected to A) should use PRIMARY color
+    active_edge = [l for l in line_shapes if l.paint.color == ft.Colors.PRIMARY]
+    passive_edge = [l for l in line_shapes if l.paint.color != ft.Colors.PRIMARY]
+    assert len(active_edge) == 1
+    assert len(passive_edge) == 1
+    # Verify passive edge is dimmed with opacity (e.g. onsurface,0.06)
+    assert "0.06" in str(passive_edge[0].paint.color)
+
+    # Neighbor B should have PRIMARY border
+    rect_shapes = [s for s in widget.canvas.shapes if isinstance(s, cv.Rect)]
+    primary_borders = [r for r in rect_shapes if r.paint.style == ft.PaintingStyle.STROKE and r.paint.color == ft.Colors.PRIMARY]
+    # Both active note A and neighbor B should have PRIMARY border
+    assert len(primary_borders) == 2
+

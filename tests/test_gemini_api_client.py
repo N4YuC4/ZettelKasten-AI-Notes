@@ -160,15 +160,48 @@ def test_generate_note_links_attaches_bidirectional_connections(monkeypatch):
         {"title": "Note Alpha", "content": "Content A", "connections": []},
         {"title": "Note Beta", "content": "Content B", "connections": []}
     ]
-    linked = client.generate_note_links(notes)
+    mock_no_mem = MagicMock()
+    mock_no_mem.is_model_available.return_value = False
+    linked = client.generate_note_links(notes, semantic_memory_service=mock_no_mem)
     assert len(linked) == 2
     assert "Note Beta" in linked[0]["connections"]
     assert "Note Alpha" in linked[1]["connections"]
 
     called_prompt = client.client.models.generate_content.call_args[1]["contents"]
-    assert "<all_notes>" in called_prompt
+    assert ("<all_notes>" in called_prompt or "<candidate_notes>" in called_prompt)
     assert "Note Alpha" in called_prompt
     assert "Note Beta" in called_prompt
+
+
+def test_generate_note_links_with_semantic_memory(monkeypatch):
+    import numpy as np
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy_key")
+    client = GeminiApiClient()
+    client.client = MagicMock()
+
+    notes = [
+        {"id": 1, "title": "Note Alpha", "content": "Content A", "connections": []},
+        {"id": 2, "title": "Note Beta", "content": "Content B", "connections": []},
+        {"id": 3, "title": "Note Gamma", "content": "Unrelated Content C", "connections": []}
+    ]
+
+    mock_memory = MagicMock()
+    mock_memory.is_model_available.return_value = True
+    dummy_emb = np.ones((3, 1024), dtype=np.float32)
+    # Pure vector linking returns (1, 2) directly above dynamic threshold
+    mock_memory.compute_semantic_links.return_value = ([(1, 2)], dummy_emb, 0.78)
+
+    linked = client.generate_note_links(notes, semantic_memory_service=mock_memory)
+
+    # ZERO Gemini API calls made!
+    client.client.models.generate_content.assert_not_called()
+
+    assert "Note Beta" in linked[0]["connections"]
+    assert "Note Alpha" in linked[1]["connections"]
+    assert "Note Gamma" not in linked[0]["connections"]
+    assert "_embedding" in linked[0]
+
+
 
 
 def test_generate_note_links_api_error_fallback(monkeypatch):
@@ -181,7 +214,9 @@ def test_generate_note_links_api_error_fallback(monkeypatch):
         {"title": "Note Alpha", "content": "Content A", "connections": []},
         {"title": "Note Beta", "content": "Content B", "connections": []}
     ]
-    res = client.generate_note_links(notes)
+    mock_no_mem = MagicMock()
+    mock_no_mem.is_model_available.return_value = False
+    res = client.generate_note_links(notes, semantic_memory_service=mock_no_mem)
     # Non-fatal: returns original notes without links
     assert len(res) == 2
     assert res[0]["connections"] == []

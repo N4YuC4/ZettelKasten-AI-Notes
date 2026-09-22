@@ -515,3 +515,34 @@ def test_worker_merges_stage1_folgezettel_and_stage2_verweis_links(temp_db, monk
     axiom_content = temp_db.read_note_content(id_axiom)
     assert "## Related Notes" not in axiom_content
     assert "[[" not in axiom_content
+
+
+def test_worker_saves_note_embeddings_atomically(temp_db, monkeypatch):
+    import numpy as np
+
+    fake_emb = np.full(1024, 0.5, dtype=np.float32)
+    stage1_notes = [
+        {"title": "Embedded Note 1", "content": "Content with embedding.", "connections": [], "_embedding": fake_emb},
+        {"title": "Embedded Note 2", "content": "Second note with embedding.", "connections": [], "_embedding": fake_emb}
+    ]
+
+    mock_gemini = MagicMock()
+    mock_gemini.generate_zettelkasten_notes.return_value = stage1_notes
+    mock_gemini.generate_note_links.return_value = stage1_notes
+    monkeypatch.setattr("ai_note_generator_worker.GeminiApiClient", lambda: mock_gemini)
+
+    worker = AiNoteGeneratorWorker("dummy text", on_finished=None, on_error=None)
+    worker.run()
+
+    title_to_id = temp_db.get_all_note_titles_and_ids()
+    id_1 = title_to_id["Embedded Note 1"]
+    id_2 = title_to_id["Embedded Note 2"]
+
+    emb_1 = temp_db.get_note_embedding(id_1)
+    emb_2 = temp_db.get_note_embedding(id_2)
+
+    assert emb_1 is not None
+    assert emb_2 is not None
+    assert len(emb_1) == 1024
+    assert np.allclose(emb_1, fake_emb)
+

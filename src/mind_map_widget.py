@@ -17,6 +17,7 @@ class MindMapWidget(ft.Container):
         self.links = []
         self.current_note_id = None
         self.node_positions = {} # Persisted coordinates {note_id: {'pos': ..., 'rect': ..., 'size': ...}}
+        self.layout_scale = 1.0
         self._last_nodes_set = None
         self._last_links_set = None
         self._last_nodes_fingerprint = None
@@ -52,6 +53,7 @@ class MindMapWidget(ft.Container):
     def invalidate_cache(self):
         """Invalidates cached node positions, bounding boxes, and layout fingerprints."""
         self.node_positions.clear()
+        self.layout_scale = 1.0
         self._last_nodes_set = None
         self._last_links_set = None
         self._last_nodes_fingerprint = None
@@ -110,8 +112,16 @@ class MindMapWidget(ft.Container):
 
         try:
             import pygraphviz as pgv
-            # Configure layout spacing and direction (Left to Right)
-            G = pgv.AGraph(directed=True, strict=True, rankdir='LR', nodesep='0.6', ranksep='1.2')
+            # Choose layout engine: 'neato' (spring model) for networked knowledge graphs,
+            # 'dot' for small acyclic hierarchies (<= 4 nodes)
+            prog = 'neato' if len(self.notes) > 4 else 'dot'
+            G = pgv.AGraph(directed=True, strict=True)
+            if prog == 'dot':
+                G.graph_attr['rankdir'] = 'LR'
+                G.graph_attr['nodesep'] = '0.6'
+                G.graph_attr['ranksep'] = '1.2'
+            else:
+                G.edge_attr['len'] = '2.5'
             
             for note_id, data in self.notes.items():
                 node_width, node_height = data['size']
@@ -125,7 +135,17 @@ class MindMapWidget(ft.Container):
                 if G.has_node(source_id) and G.has_node(target_id):
                     G.add_edge(source_id, target_id)
             
-            G.layout(prog='dot')
+            if prog == 'neato':
+                try:
+                    # 1st priority: 2D Delaunay Voronoi separation to prevent 1D vertical stacking
+                    G.layout(prog='neato', args='-Goverlap=false -Gsep=+8')
+                except Exception:
+                    try:
+                        G.layout(prog='neato', args='-Goverlap=vpsc -Gsep=+10')
+                    except Exception:
+                        G.layout(prog='neato')
+            else:
+                G.layout(prog='dot')
             
             for node in G.nodes():
                 try:
@@ -198,9 +218,17 @@ class MindMapWidget(ft.Container):
         min_y = min((raw_positions[nid][1] - self.notes[nid]['size'][1] / 2 for nid in self.notes if nid in raw_positions), default=0.0)
         max_y = max((raw_positions[nid][1] + self.notes[nid]['size'][1] / 2 for nid in self.notes if nid in raw_positions), default=0.0)
 
-        padding = 50
-        total_width = max(350, max_x - min_x + 2 * padding)
-        total_height = max(350, max_y - min_y + 2 * padding)
+        padding = 50.0
+        raw_width = max(350.0, max_x - min_x + 2 * padding)
+        raw_height = max(350.0, max_y - min_y + 2 * padding)
+
+        # Scale down only if canvas exceeds GPU hardware texture limit (max 8192px)
+        MAX_CANVAS_DIM = 8192.0
+        max_dim = max(raw_width, raw_height)
+        self.layout_scale = (MAX_CANVAS_DIM / max_dim) if max_dim > MAX_CANVAS_DIM else 1.0
+
+        total_width = raw_width * self.layout_scale
+        total_height = raw_height * self.layout_scale
 
         self.gd.width = total_width
         self.gd.height = total_height
@@ -212,16 +240,19 @@ class MindMapWidget(ft.Container):
         for note_id, (raw_x, raw_y) in raw_positions.items():
             if note_id not in self.notes:
                 continue
-            mapped_x = (raw_x - min_x) + padding
-            mapped_y = (raw_y - min_y) + padding
+            orig_w, orig_h = self.notes[note_id]['size']
+            w = orig_w * self.layout_scale
+            h = orig_h * self.layout_scale
 
-            w, h = self.notes[note_id]['size']
-            
+            mapped_x = ((raw_x - min_x) + padding) * self.layout_scale
+            mapped_y = ((raw_y - min_y) + padding) * self.layout_scale
+
             rx = mapped_x - w / 2
             ry = mapped_y - h / 2
 
             self.notes[note_id]['pos'] = (mapped_x, mapped_y)
             self.notes[note_id]['rect'] = (rx, ry, rx + w, ry + h)
+            self.notes[note_id]['size'] = (w, h)
 
             # Persist positions for future layout updates
             self.node_positions[note_id] = {
@@ -233,81 +264,139 @@ class MindMapWidget(ft.Container):
     # The _draw_map method populates the Flet Canvas shapes list and renders it.
     def _draw_map(self):
         shapes = []
+        scale = getattr(self, "layout_scale", 1.0)
         
-        # 1. Draw edge links (lines with arrowheads)
-        edge_width = 1.5
-        edge_paint = ft.Paint(color=ft.Colors.OUTLINE_VARIANT, stroke_width=edge_width, style=ft.PaintingStyle.STROKE)
-        
+        # Identify neighbor notes connected to currently active note (if any)
+        connected_neighbors = set()
+        if self.current_note_id:
+            for s, t in self.links:
+                if s == self.current_note_id and t != self.current_note_id:
+                    connected_neighbors.add(t)
+                elif t == self.current_note_id and s != self.current_note_id:
+                    connected_neighbors.add(s)
+
+        has_selection = bool(self.current_note_id and self.current_note_id in self.notes)
+
+        # 1. Edge paints configuration
+        # In Focus Mode (note selected), highlight active starburst and dim unrelated edges to eliminate line clutter
+        active_width = max(2.2, 2.6 * scale)
+        active_edge_paint = ft.Paint(
+            color=ft.Colors.PRIMARY,
+            stroke_width=active_width,
+            style=ft.PaintingStyle.STROKE
+        )
+        local_cluster_paint = ft.Paint(
+            color=ft.Colors.with_opacity(0.35, ft.Colors.PRIMARY),
+            stroke_width=max(1.0, 1.4 * scale),
+            style=ft.PaintingStyle.STROKE
+        )
+        # Background lines: faint, subtle and non-intrusive (never thick opaque cables)
+        passive_edge_paint = ft.Paint(
+            color=ft.Colors.with_opacity(0.06 if has_selection else 0.20, ft.Colors.ON_SURFACE),
+            stroke_width=max(0.8, 1.0 * scale),
+            style=ft.PaintingStyle.STROKE
+        )
+
+        seen_pairs = set()
+        passive_lines = []
+        active_lines = []
+
         for source_id, target_id in self.links:
-            if source_id in self.notes and target_id in self.notes:
-                start_x, start_y = self.notes[source_id]['pos']
-                end_x, end_y = self.notes[target_id]['pos']
-                
-                # Calculate direct distance
-                dx = end_x - start_x
-                dy = end_y - start_y
-                dist = math.hypot(dx, dy)
-                if dist == 0:
-                    continue
-                    
-                target_w, target_h = self.notes[target_id]['size']
-                # Stop edge line at target node border, clamped to prevent inverted arrowheads
-                radius = min(target_w, target_h) / 2 + 5
-                radius = min(radius, max(0.0, dist - 5))
-                
-                adj_end_x = end_x - (dx / dist) * radius
-                adj_end_y = end_y - (dy / dist) * radius
-                
-                # Edge line
-                shapes.append(cv.Line(x1=start_x, y1=start_y, x2=adj_end_x, y2=adj_end_y, paint=edge_paint))
-                
-                # Arrowhead lines
-                angle = math.atan2(dy, dx)
-                arrow_size = 8
-                
-                x1 = adj_end_x - arrow_size * math.cos(angle - math.pi / 6)
-                y1 = adj_end_y - arrow_size * math.sin(angle - math.pi / 6)
-                x2 = adj_end_x - arrow_size * math.cos(angle + math.pi / 6)
-                y2 = adj_end_y - arrow_size * math.sin(angle + math.pi / 6)
-                
-                shapes.append(cv.Line(x1=adj_end_x, y1=adj_end_y, x2=x1, y2=y1, paint=edge_paint))
-                shapes.append(cv.Line(x1=adj_end_x, y1=adj_end_y, x2=x2, y2=y2, paint=edge_paint))
-                
-        # 2. Draw nodes
-        border_width = 1.5
-        border_paint = ft.Paint(color=ft.Colors.OUTLINE_VARIANT, stroke_width=border_width, style=ft.PaintingStyle.STROKE)
-        
-        for note_id, data in self.notes.items():
+            if source_id == target_id:
+                continue
+            if source_id not in self.notes or target_id not in self.notes:
+                continue
+
+            pair_key = (min(source_id, target_id), max(source_id, target_id))
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
+            start_x, start_y = self.notes[source_id]['pos']
+            end_x, end_y = self.notes[target_id]['pos']
+
+            is_active = (has_selection and (source_id == self.current_note_id or target_id == self.current_note_id))
+            is_local = (has_selection and (source_id in connected_neighbors and target_id in connected_neighbors))
+
+            if is_active:
+                line = cv.Line(x1=start_x, y1=start_y, x2=end_x, y2=end_y, paint=active_edge_paint)
+                active_lines.append(line)
+            elif is_local:
+                line = cv.Line(x1=start_x, y1=start_y, x2=end_x, y2=end_y, paint=local_cluster_paint)
+                passive_lines.append(line)
+            else:
+                line = cv.Line(x1=start_x, y1=start_y, x2=end_x, y2=end_y, paint=passive_edge_paint)
+                passive_lines.append(line)
+
+        # Layer edges: passive edges first, active edges on top
+        shapes.extend(passive_lines)
+        shapes.extend(active_lines)
+
+        # 2. Draw nodes (unrelated first, neighbors next, active note on top)
+        sorted_notes = sorted(
+            self.notes.items(),
+            key=lambda item: (2 if item[0] == self.current_note_id else (1 if item[0] in connected_neighbors else 0))
+        )
+
+        for note_id, data in sorted_notes:
             mapped_x, mapped_y = data['pos']
             rx, ry, rx2, ry2 = data['rect']
             w, h = data['size']
             title = data['title']
-            
-            # Use specific color based on selection status
+
             is_current = (note_id == self.current_note_id)
-            color = ft.Colors.PRIMARY if is_current else ft.Colors.SURFACE_CONTAINER_HIGHEST
-            text_color = ft.Colors.ON_PRIMARY if is_current else ft.Colors.ON_SURFACE
-            
-            fill_paint = ft.Paint(color=color, style=ft.PaintingStyle.FILL)
-            
+            is_neighbor = (note_id in connected_neighbors)
+
+            if is_current:
+                fill_color = ft.Colors.PRIMARY
+                text_color = ft.Colors.ON_PRIMARY
+                border_color = ft.Colors.PRIMARY
+                border_width = max(2.0, 2.5 * scale)
+            elif is_neighbor:
+                fill_color = ft.Colors.SURFACE_CONTAINER_HIGHEST
+                text_color = ft.Colors.ON_SURFACE
+                border_color = ft.Colors.PRIMARY
+                border_width = max(1.5, 2.0 * scale)
+            else:
+                # Dim unrelated nodes when a note is active
+                if has_selection:
+                    fill_color = ft.Colors.SURFACE_CONTAINER
+                    text_color = ft.Colors.with_opacity(0.40, ft.Colors.ON_SURFACE)
+                    border_color = ft.Colors.with_opacity(0.18, ft.Colors.OUTLINE)
+                    border_width = max(0.8, 1.0 * scale)
+                else:
+                    fill_color = ft.Colors.SURFACE_CONTAINER_HIGHEST
+                    text_color = ft.Colors.ON_SURFACE
+                    border_color = ft.Colors.OUTLINE_VARIANT
+                    border_width = max(1.0, 1.5 * scale)
+
+            fill_paint = ft.Paint(color=fill_color, style=ft.PaintingStyle.FILL)
+            border_paint = ft.Paint(color=border_color, stroke_width=border_width, style=ft.PaintingStyle.STROKE)
+
             # Dynamic border radius
-            node_border_radius = 8
-            
-            # Node background rectangle
+            node_border_radius = max(3.0, 8.0 * scale)
+
+            # Node background rectangle (masks edge lines passing through node center)
             shapes.append(cv.Rect(x=rx, y=ry, width=w, height=h, border_radius=node_border_radius, paint=fill_paint))
             # Node border rectangle
             shapes.append(cv.Rect(x=rx, y=ry, width=w, height=h, border_radius=node_border_radius, paint=border_paint))
-            
-            # Node text label with dynamic font size (minimum 9px)
-            font_size = 13
+
+            # Node text label with dynamic font size and ellipsis protection
+            font_size = max(8, int(13 * scale))
             shapes.append(cv.Text(
                 x=mapped_x,
                 y=mapped_y,
                 value=title,
                 alignment=ft.Alignment.CENTER,
-                style=ft.TextStyle(size=font_size, color=text_color, weight=ft.FontWeight.BOLD)
+                max_lines=1,
+                ellipsis="...",
+                style=ft.TextStyle(
+                    size=font_size,
+                    color=text_color,
+                    weight=ft.FontWeight.BOLD if (is_current or is_neighbor) else ft.FontWeight.NORMAL
+                )
             ))
-            
+
         self.canvas.shapes = shapes
         try:
             self.canvas.update()
@@ -340,6 +429,8 @@ class MindMapWidget(ft.Container):
                 continue
             rx, ry, rx2, ry2 = rect
             if rx <= click_x <= rx2 and ry <= click_y <= ry2:
+                self.current_note_id = note_id
+                self._draw_map()
                 if self.on_note_selected and callable(self.on_note_selected):
                     self.on_note_selected(note_id)
                 break

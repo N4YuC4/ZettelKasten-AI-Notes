@@ -838,150 +838,180 @@ class DialogManager:
         def refresh_models_list():
             models_listview.controls.clear()
             model_controls_map.clear()
-            curated_models = local_models_catalog.get_curated_models()
+            all_models = local_models_catalog.get_all_models()
 
-            for model in curated_models:
-                is_downloaded = ModelDownloader.is_model_downloaded(model, models_dir)
-                is_downloading = ModelDownloader.is_downloading(model.id)
-                current_status = ModelDownloader.get_status(model.id)
-                is_active = (model.id == active_model_id)
+            generation_models = [m for m in all_models if m.model_type == "generation"]
+            embedding_models = [m for m in all_models if m.model_type == "embedding"]
 
-                is_runnable, hw_msg, hw_status = HardwareChecker.check_model_compatibility(model)
+            groups = [
+                ("Text Generation Models", generation_models),
+                ("Semantic Memory & Linking Models", embedding_models)
+            ]
 
-                if hw_status == "OK":
-                    hw_badge = ft.Container(
-                        content=ft.Text("🟢 System Compatible", size=11, color=ft.Colors.GREEN_400, weight=ft.FontWeight.BOLD),
-                        bgcolor=ft.Colors.GREEN_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.GREEN_100,
-                        padding=ft.Padding.symmetric(horizontal=6, vertical=2),
-                        border_radius=6
+            for group_title, group_models in groups:
+                if not group_models:
+                    continue
+
+                models_listview.controls.append(
+                    ft.Container(
+                        content=ft.Text(group_title, size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.PRIMARY),
+                        padding=ft.Padding.only(top=8, bottom=4)
                     )
-                elif hw_status == "WARNING":
-                    hw_badge = ft.Container(
-                        content=ft.Text("🟡 Low Memory", size=11, color=ft.Colors.AMBER_400, weight=ft.FontWeight.BOLD),
-                        bgcolor=ft.Colors.AMBER_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.AMBER_100,
-                        padding=ft.Padding.symmetric(horizontal=6, vertical=2),
-                        border_radius=6
-                    )
-                else:
-                    hw_badge = ft.Container(
-                        content=ft.Text("🔴 Insufficient Memory", size=11, color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD),
-                        bgcolor=ft.Colors.RED_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.RED_100,
-                        padding=ft.Padding.symmetric(horizontal=6, vertical=2),
-                        border_radius=6
-                    )
-
-                init_progress = current_status.progress if is_downloading else 0.0
-                progress_bar = ft.ProgressBar(
-                    visible=is_downloading,
-                    value=init_progress,
-                    color=ft.Colors.PRIMARY
                 )
 
-                default_stat = f"Size: ~{model.size_gb:.1f} GB  |  Min. RAM: {model.min_ram_gb:.0f} GB"
-                if is_downloading and current_status.status_text:
-                    default_stat = current_status.status_text
-                elif current_status.state == "error" and current_status.error_message:
-                    default_stat = f"Error: {current_status.error_message}"
+                for model in group_models:
+                    is_downloaded = ModelDownloader.is_model_downloaded(model, models_dir)
+                    is_downloading = ModelDownloader.is_downloading(model.id)
+                    current_status = ModelDownloader.get_status(model.id)
+                    is_active = (model.id == active_model_id and model.model_type == "generation")
 
-                status_text = ft.Text(
-                    default_stat,
-                    size=11,
-                    weight=ft.FontWeight.W_500 if is_downloading else ft.FontWeight.NORMAL,
-                    color=ft.Colors.ERROR if current_status.state == "error" else (ft.Colors.PRIMARY if is_downloading else ft.Colors.ON_SURFACE_VARIANT)
-                )
+                    is_runnable, hw_msg, hw_status = HardwareChecker.check_model_compatibility(model)
 
-                action_row = ft.Row(spacing=8, alignment=ft.MainAxisAlignment.END)
-
-                if is_downloading:
-                    action_row.controls.append(
-                        ft.TextButton(
-                            "Cancel",
-                            icon=ft.Icons.CANCEL,
-                            icon_color=ft.Colors.ERROR,
-                            on_click=lambda e, m=model: (
-                                ModelDownloader.cancel_download(m.id),
-                                refresh_models_list()
-                            )
+                    if hw_status == "OK":
+                        hw_badge = ft.Container(
+                            content=ft.Text("🟢 System Compatible", size=11, color=ft.Colors.GREEN_400, weight=ft.FontWeight.BOLD),
+                            bgcolor=ft.Colors.GREEN_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.GREEN_100,
+                            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                            border_radius=6
                         )
-                    )
-                elif is_downloaded:
-                    if is_active:
-                        action_row.controls.append(
-                            ft.Container(
-                                content=ft.Row([
-                                    ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.PRIMARY),
-                                    ft.Text("Active Model", size=12, color=ft.Colors.PRIMARY, weight=ft.FontWeight.BOLD)
-                                ], spacing=4),
-                                bgcolor=ft.Colors.PRIMARY_CONTAINER,
-                                padding=ft.Padding.symmetric(horizontal=8, vertical=4),
-                                border_radius=6
-                            )
+                    elif hw_status == "WARNING":
+                        hw_badge = ft.Container(
+                            content=ft.Text("🟡 Low Memory", size=11, color=ft.Colors.AMBER_400, weight=ft.FontWeight.BOLD),
+                            bgcolor=ft.Colors.AMBER_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.AMBER_100,
+                            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                            border_radius=6
                         )
                     else:
+                        hw_badge = ft.Container(
+                            content=ft.Text("🔴 Insufficient Memory", size=11, color=ft.Colors.RED_400, weight=ft.FontWeight.BOLD),
+                            bgcolor=ft.Colors.RED_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.RED_100,
+                            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                            border_radius=6
+                        )
+
+                    init_progress = current_status.progress if is_downloading else 0.0
+                    progress_bar = ft.ProgressBar(
+                        visible=is_downloading,
+                        value=init_progress,
+                        color=ft.Colors.PRIMARY
+                    )
+
+                    default_stat = f"Size: ~{model.size_gb:.1f} GB  |  Min. RAM: {model.min_ram_gb:.0f} GB"
+                    status_text = ft.Text(
+                        (current_status.status_text or default_stat) if is_downloading else default_stat,
+                        size=11,
+                        color=ft.Colors.ON_SURFACE_VARIANT
+                    )
+
+                    action_row = ft.Row(spacing=8, alignment=ft.MainAxisAlignment.END)
+
+                    if is_downloading:
                         action_row.controls.append(
-                            ft.Button(
-                                "Select",
-                                icon=ft.Icons.CHECK,
+                            ft.IconButton(
+                                icon=ft.Icons.CANCEL,
+                                icon_color=ft.Colors.ERROR,
                                 on_click=lambda e, m=model: (
-                                    on_select_model(m.id),
+                                    ModelDownloader.cancel_download(m.id),
                                     refresh_models_list()
                                 )
                             )
                         )
-                    action_row.controls.append(
-                        ft.IconButton(
-                            icon=ft.Icons.DELETE_OUTLINE,
-                            icon_color=ft.Colors.ERROR,
-                            tooltip="Delete Model File",
-                            on_click=lambda e, m=model: (
+                    elif is_downloaded:
+                        if model.model_type == "embedding":
+                            action_row.controls.append(
+                                ft.Container(
+                                    content=ft.Row([
+                                        ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.GREEN_400),
+                                        ft.Text("Installed", size=12, color=ft.Colors.GREEN_400, weight=ft.FontWeight.BOLD)
+                                    ], spacing=4),
+                                    bgcolor=ft.Colors.GREEN_900 if self.page.theme_mode == ft.ThemeMode.DARK else ft.Colors.GREEN_100,
+                                    padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                                    border_radius=6
+                                )
+                            )
+                        elif is_active:
+                            action_row.controls.append(
+                                ft.Container(
+                                    content=ft.Row([
+                                        ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=ft.Colors.PRIMARY),
+                                        ft.Text("Active Model", size=12, color=ft.Colors.PRIMARY, weight=ft.FontWeight.BOLD)
+                                    ], spacing=4),
+                                    bgcolor=ft.Colors.PRIMARY_CONTAINER,
+                                    padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+                                    border_radius=6
+                                )
+                            )
+                        else:
+                            action_row.controls.append(
+                                ft.Button(
+                                    "Select",
+                                    icon=ft.Icons.CHECK,
+                                    on_click=lambda e, m=model: (
+                                        on_select_model(m.id),
+                                        refresh_models_list()
+                                    )
+                                )
+                            )
+                        
+                        def make_delete_handler(m_item):
+                            return lambda e: (
                                 LocalGgufClient.unload_cached_model(),
-                                ModelDownloader.delete_model(m, models_dir),
-                                on_model_deleted(m.id) if on_model_deleted else None,
+                                ModelDownloader.delete_model(m_item, models_dir),
+                                on_model_deleted(m_item.id) if (on_model_deleted and m_item.model_type != "embedding") else None,
                                 refresh_models_list()
                             )
+
+                        action_row.controls.append(
+                            ft.IconButton(
+                                icon=ft.Icons.DELETE_OUTLINE,
+                                icon_color=ft.Colors.ERROR,
+                                tooltip="Delete Model File",
+                                on_click=make_delete_handler(model)
+                            )
                         )
+                    else:
+                        def make_dl_handler(m_item):
+                            return lambda e: (
+                                ModelDownloader.start_download(
+                                    m_item,
+                                    models_dir,
+                                    on_finished=lambda p: refresh_models_list(),
+                                    on_error=lambda err: refresh_models_list()
+                                ),
+                                refresh_models_list()
+                            )
+
+                        dl_btn_label = "Retry" if current_status.state == "error" else "Download Model"
+                        action_row.controls.append(
+                            ft.Button(
+                                dl_btn_label,
+                                icon=ft.Icons.REFRESH if current_status.state == "error" else ft.Icons.DOWNLOAD,
+                                disabled=not is_runnable,
+                                tooltip=hw_msg if not is_runnable else None,
+                                on_click=make_dl_handler(model)
+                            )
+                        )
+
+                    # Store controls for real-time polling updates
+                    model_controls_map[model.id] = (progress_bar, status_text)
+
+                    card = ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Text(model.display_name, size=15, weight=ft.FontWeight.BOLD),
+                                hw_badge
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            ft.Text(model.user_description, size=12),
+                            status_text,
+                            progress_bar,
+                            action_row
+                        ], spacing=6),
+                        padding=12,
+                        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH if is_active else ft.Colors.SURFACE_CONTAINER,
+                        border=ft.Border.all(1.5, ft.Colors.PRIMARY) if is_active else None,
+                        border_radius=10
                     )
-                else:
-                    def start_dl_click(e, m=model):
-                        ModelDownloader.start_download(
-                            m,
-                            models_dir,
-                            on_finished=lambda p: refresh_models_list(),
-                            on_error=lambda err: refresh_models_list()
-                        )
-                        refresh_models_list()
-
-                    dl_btn_label = "Retry" if current_status.state == "error" else "Download Model"
-                    action_row.controls.append(
-                        ft.Button(
-                            dl_btn_label,
-                            icon=ft.Icons.REFRESH if current_status.state == "error" else ft.Icons.DOWNLOAD,
-                            disabled=not is_runnable,
-                            tooltip=hw_msg if not is_runnable else None,
-                            on_click=start_dl_click
-                        )
-                    )
-
-                # Store controls for real-time polling updates
-                model_controls_map[model.id] = (progress_bar, status_text)
-
-                card = ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Text(model.display_name, size=15, weight=ft.FontWeight.BOLD),
-                            hw_badge
-                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                        ft.Text(model.user_description, size=12),
-                        status_text,
-                        progress_bar,
-                        action_row
-                    ], spacing=6),
-                    padding=12,
-                    bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH if is_active else ft.Colors.SURFACE_CONTAINER,
-                    border=ft.Border.all(1.5, ft.Colors.PRIMARY) if is_active else None,
-                    border_radius=10
-                )
-                models_listview.controls.append(card)
+                    models_listview.controls.append(card)
 
             try:
                 unload_btn.visible = LocalGgufClient.is_model_loaded()
@@ -995,7 +1025,7 @@ class DialogManager:
             nonlocal is_dialog_active
             while is_dialog_active:
                 try:
-                    for model in local_models_catalog.get_curated_models():
+                    for model in local_models_catalog.get_all_models():
                         status = ModelDownloader.get_status(model.id)
                         if model.id in model_controls_map:
                             pb, st = model_controls_map[model.id]

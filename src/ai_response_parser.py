@@ -202,6 +202,7 @@ class AiResponseParser:
         gen_title = ""
         raw_links: List[Any] = []
 
+        found_notes_key = False
         if isinstance(data, list):
             items = [item for item in data if isinstance(item, dict)]
         elif isinstance(data, dict):
@@ -209,13 +210,15 @@ class AiResponseParser:
             for key in ('notes', 'zettelkasten', 'data', 'items', 'result', 'generated_notes'):
                 if key in data and isinstance(data[key], list):
                     items = [item for item in data[key] if isinstance(item, dict)]
+                    found_notes_key = True
                     break
-            if not items and ('title' in data or 'content' in data):
-                items = [data]
-            elif not items:
-                dict_values = [v for v in data.values() if isinstance(v, dict)]
-                if dict_values:
-                    items = dict_values
+            if not found_notes_key:
+                if 'title' in data and 'content' in data:
+                    items = [data]
+                else:
+                    dict_values = [v for v in data.values() if isinstance(v, dict) and ('title' in v and 'content' in v)]
+                    if dict_values:
+                        items = dict_values
 
             # Extract top-level links if present
             for lkey in ('links', 'relations', 'edges', 'connections'):
@@ -226,6 +229,26 @@ class AiResponseParser:
         if not items:
             return []
 
+        # Filter and sanitize valid notes: drop empty notes, meta-placeholders, and non-notes
+        valid_items: List[Dict[str, Any]] = []
+        for it in items:
+            raw_title = str(it.get("title", "")).strip().strip('"\'')
+            raw_content = str(it.get("content", "")).strip()
+            # Require meaningful title and non-empty content
+            if not raw_title or not raw_content:
+                continue
+            # Drop prompt meta-syntax placeholders (e.g. '<Primary Concept...>')
+            if raw_title.startswith("<") and raw_title.endswith(">"):
+                continue
+            if raw_title.lower() in ("untitled note", "new note"):
+                continue
+            it["title"] = raw_title
+            valid_items.append(it)
+
+        items = valid_items
+        if not items:
+            return []
+
         # 1. Build ID and Title lookup tables
         id_to_note: Dict[Any, Dict[str, Any]] = {}
         clean_title_map: Dict[str, str] = {}
@@ -233,7 +256,6 @@ class AiResponseParser:
         for idx, it in enumerate(items):
             if gen_title and not it.get("general_title"):
                 it["general_title"] = gen_title
-            it["title"] = str(it.get("title", "")).strip().strip('"\'')
             canon_title = it["title"]
             if "connections" not in it or not isinstance(it["connections"], list):
                 it["connections"] = []

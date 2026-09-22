@@ -21,6 +21,8 @@ class LocalModelInfo:
     min_ram_gb: float
     recommended_ram_gb: float
     context_window: int = 32768
+    model_type: str = "generation"  # "generation" or "embedding"
+    dimensions: int = 0
 
     @property
     def download_url(self) -> str:
@@ -46,6 +48,7 @@ CURATED_MODELS: Dict[str, LocalModelInfo] = {
         min_ram_gb=4.0,
         recommended_ram_gb=8.0,
         context_window=131072,
+        model_type="generation",
     ),
     "gemma-4-12b": LocalModelInfo(
         id="gemma-4-12b",
@@ -58,6 +61,7 @@ CURATED_MODELS: Dict[str, LocalModelInfo] = {
         min_ram_gb=8.0,
         recommended_ram_gb=16.0,
         context_window=131072,
+        model_type="generation",
     ),
     "gemma-4-26b-moe": LocalModelInfo(
         id="gemma-4-26b-moe",
@@ -70,14 +74,47 @@ CURATED_MODELS: Dict[str, LocalModelInfo] = {
         min_ram_gb=16.0,
         recommended_ram_gb=32.0,
         context_window=131072,
+        model_type="generation",
+    ),
+    "harrier-oss-v1-0.6b": LocalModelInfo(
+        id="harrier-oss-v1-0.6b",
+        display_name="Microsoft Harrier (0.6B)",
+        user_description="32K Context Multilingual Embedding — State-of-the-art semantic memory and knowledge graph linking",
+        tier_label="Embedding",
+        repo_id="mradermacher/harrier-oss-v1-0.6b-GGUF",
+        filename="harrier-oss-v1-0.6b.Q4_K_M.gguf",
+        size_bytes=396_000_000,
+        min_ram_gb=2.0,
+        recommended_ram_gb=4.0,
+        context_window=32768,
+        model_type="embedding",
+        dimensions=1024,
     ),
 }
 
 DEFAULT_MODEL_ID = "gemma-4-e2b"
+DEFAULT_EMBEDDING_MODEL_ID = "harrier-oss-v1-0.6b"
 
 
-def get_curated_models() -> List[LocalModelInfo]:
-    """Returns a list of all curated models in order of tier."""
+def get_curated_models(model_type: Optional[str] = "generation") -> List[LocalModelInfo]:
+    """Returns a list of curated models. By default returns generation models for backward compatibility."""
+    if model_type is None:
+        return list(CURATED_MODELS.values())
+    return [m for m in CURATED_MODELS.values() if m.model_type == model_type]
+
+
+def get_embedding_models() -> List[LocalModelInfo]:
+    """Returns all curated embedding models."""
+    return [m for m in CURATED_MODELS.values() if m.model_type == "embedding"]
+
+
+def get_generation_models() -> List[LocalModelInfo]:
+    """Returns all curated text generation models."""
+    return [m for m in CURATED_MODELS.values() if m.model_type == "generation"]
+
+
+def get_all_models() -> List[LocalModelInfo]:
+    """Returns all curated models regardless of type."""
     return list(CURATED_MODELS.values())
 
 

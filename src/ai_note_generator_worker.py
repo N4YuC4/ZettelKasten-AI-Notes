@@ -392,15 +392,22 @@ class AiNoteGeneratorWorker:
                 return
 
             # 4. Stage 1: Build fresh mapping of existing notes & disambiguate titles
+            # Filter out invalid, empty, or placeholder notes before title processing
+            generated_notes = [
+                nd for nd in generated_notes
+                if isinstance(nd, dict)
+                and str(nd.get('title', '')).strip()
+                and bool(str(nd.get('content', '')).strip())
+                and not (str(nd.get('title', '')).strip().startswith('<') and str(nd.get('title', '')).strip().endswith('>'))
+                and str(nd.get('title', '')).strip().lower() not in ('untitled note', 'new note')
+            ]
+
             title_to_id = db_manager_worker.get_all_note_titles_and_ids()
             used_titles = set(title_to_id.keys())
             batch_title_to_id = {}
             log_debug(f"DEBUG: Initial title_to_id count: {len(title_to_id)}")
 
             for note_data in generated_notes:
-                if not isinstance(note_data, dict):
-                    continue
-
                 raw_title = note_data.get('title', 'Untitled Note')
                 sanitized_title = note_service.sanitize_title(f"# {raw_title}")
                 final_title = note_service.disambiguate_title(sanitized_title, used_titles)
@@ -499,9 +506,28 @@ class AiNoteGeneratorWorker:
 
             # 6. Stage 3: Atomic single-transaction database insertion
             self.report_progress("Saving notes to database...")
+            embeddings_to_insert = {}
+            for note_data, note_tuple in zip(generated_notes, notes_to_insert):
+                if "_embedding" in note_data and note_data["_embedding"] is not None:
+                    final_id = note_tuple[0]
+                    embeddings_to_insert[final_id] = note_data["_embedding"]
+
             try:
-                db_manager_worker.bulk_insert_notes_and_links(notes_to_insert, links_to_insert)
-                log_debug(f"DEBUG: Atomically inserted {len(notes_to_insert)} notes and {len(links_to_insert)} links.")
+                if embeddings_to_insert:
+                    db_manager_worker.bulk_insert_notes_and_links(
+                        notes_to_insert,
+                        links_to_insert,
+                        embeddings_data=embeddings_to_insert
+                    )
+                else:
+                    db_manager_worker.bulk_insert_notes_and_links(
+                        notes_to_insert,
+                        links_to_insert
+                    )
+                log_debug(
+                    f"DEBUG: Atomically inserted {len(notes_to_insert)} notes, "
+                    f"{len(links_to_insert)} links, and {len(embeddings_to_insert)} embeddings."
+                )
             except Exception as db_err:
                 log_error(f"Database error during atomic batch insertion: {db_err}")
                 raise db_err

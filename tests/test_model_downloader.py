@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 import pytest
-from model_downloader import ModelDownloader
+from model_downloader import ModelDownloader, DownloadStatus
 from hardware_checker import HardwareChecker
 import local_models_catalog as catalog
 
@@ -217,6 +217,17 @@ def test_download_retry_counter_resets_on_successful_data_transfer(tmp_path):
     assert "(2/30)" in retry_statuses[1]
     # Third failure (after streaming 512 bytes): MUST have reset so it is (1/30), NOT (3/30)!
     assert "(1/30)" in retry_statuses[2]
+
+
+def test_download_status_message_property():
+    status = DownloadStatus(model_id="test-model", status_text="Downloading: 50%")
+    assert status.message == "Downloading: 50%"
+
+    error_status = DownloadStatus(model_id="test-model", error_message="Network timeout")
+    assert error_status.message == "Network timeout"
+
+    empty_status = DownloadStatus(model_id="test-model")
+    assert empty_status.message == ""
 
 
 

@@ -24,6 +24,8 @@ from prompt_templates import (
     SYSTEM_INSTRUCTION_LINKING,
     build_note_extraction_prompt,
     build_graph_linking_prompt,
+    build_candidate_pairs_verification_prompt,
+    partition_candidate_pairs,
 )
 from ai_provider import BaseAiProvider
 import semantic_chunker
@@ -414,6 +416,7 @@ class LocalGgufClient(BaseAiProvider):
                     if not unified_general_title and note.get("general_title"):
                         unified_general_title = note["general_title"].strip()
 
+                    note["_chunk_id"] = idx
                     title = note.get("title", "").strip()
                     title_key = title.lower()
                     if title_key and title_key not in seen_titles:
@@ -463,13 +466,17 @@ class LocalGgufClient(BaseAiProvider):
     def generate_note_links(
         self,
         notes: List[Dict[str, Any]],
-        on_progress: Optional[Callable[[str], None]] = None
+        on_progress: Optional[Callable[[str], None]] = None,
+        similarity_threshold: Optional[float] = None,
+        semantic_memory_service: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """
         Stage 2 of the Two-Stage Pipeline: Global Knowledge Graph Linking.
-        Takes the complete set of notes generated in Stage 1 with full titles and contents.
-        Queries the LLM with the numbered notes map to discover genuine conceptual connections.
-        Attaches discovered connections directly to each note's 'connections' list.
+        When SemanticMemoryService (Microsoft Harrier 0.6B) is available:
+        Performs Pure Semantic Vector Linking using statistical Z-score dynamic thresholding
+        (threshold = max(quality_floor, mean + 1.8 * std)), establishing genuine knowledge graph
+        connections in milliseconds with 0 LLM calls, 0 prompt tokens, and 0 context overflow risk.
+        Falls back gracefully to legacy direct LLM prompt if the embedding model is not installed.
         """
         if not notes or len(notes) <= 1:
             return notes
@@ -478,7 +485,37 @@ class LocalGgufClient(BaseAiProvider):
         if on_progress:
             on_progress("Analyzing conceptual links between notes...")
 
-        # Prepare numbered notes export for prompt input
+        # 1. Attempt Pure Semantic Linking via SemanticMemoryService
+        memory_service = semantic_memory_service
+        if memory_service is None:
+            try:
+                from semantic_memory_service import SemanticMemoryService
+                memory_service = SemanticMemoryService()
+            except Exception as e:
+                log_debug(f"SemanticMemoryService init error (falling back to direct prompt): {e}")
+                memory_service = None
+
+        if memory_service and memory_service.is_model_available():
+            try:
+                if on_progress:
+                    on_progress("Computing semantic connections with Harrier embedding...")
+                link_pairs, embeddings, eff_threshold = memory_service.compute_semantic_links(
+                    notes, similarity_threshold=similarity_threshold, cross_chunk_only=True
+                )
+                # Store embeddings on notes for subsequent persistence
+                if embeddings is not None and len(embeddings) == len(notes):
+                    for idx, note in enumerate(notes):
+                        note["_embedding"] = embeddings[idx]
+
+                log_debug(
+                    f"Stage 2 pure semantic linking discovered {len(link_pairs)} connections "
+                    f"(effective threshold: {eff_threshold:.4f}). Attaching links..."
+                )
+                return AiResponseParser.attach_links_to_notes(notes, link_pairs)
+            except Exception as e:
+                log_error(f"Pure semantic linking error (falling back to direct LLM prompt): {e}")
+
+        # Fallback legacy prompt (if embedding model is not yet installed or failed)
         full_notes_payload = [
             {
                 "id": idx + 1,
@@ -489,7 +526,6 @@ class LocalGgufClient(BaseAiProvider):
             if n.get("title")
         ]
 
-        # Dynamic prompt budget calculation adapted to self.n_ctx
         notes_json_str = json.dumps(full_notes_payload, ensure_ascii=False, indent=2)
         safe_prompt_budget = max(2048, self.n_ctx - 4096 - 500)
         if self._count_tokens(notes_json_str) > safe_prompt_budget:
@@ -504,20 +540,19 @@ class LocalGgufClient(BaseAiProvider):
             ]
 
         user_prompt = build_graph_linking_prompt(full_notes_payload)
+        prompt_tokens = self._count_tokens(user_prompt) + 200
+        remaining_ctx = max(4096, self.n_ctx - prompt_tokens - 100)
+        safe_max_tokens = min(8192, remaining_ctx)
+
+        log_debug(
+            f"Stage 2 linking budget (legacy): n_ctx={self.n_ctx}, prompt_tokens={prompt_tokens}, "
+            f"remaining_ctx={remaining_ctx}, safe_max_tokens={safe_max_tokens}"
+        )
 
         messages = [
             {"role": "system", "content": SYSTEM_INSTRUCTION_LINKING},
             {"role": "user", "content": user_prompt}
         ]
-
-        # Calculate safe max_tokens allowing deep relationship reasoning across all notes without truncation
-        prompt_tokens = self._count_tokens(user_prompt) + 200
-        remaining_ctx = max(4096, self.n_ctx - prompt_tokens - 100)
-        safe_max_tokens = min(8192, remaining_ctx)
-        log_debug(
-            f"Stage 2 linking budget: n_ctx={self.n_ctx}, prompt_tokens={prompt_tokens}, "
-            f"remaining_ctx={remaining_ctx}, safe_max_tokens={safe_max_tokens}"
-        )
 
         try:
             response = self.llm.create_chat_completion(
@@ -527,14 +562,14 @@ class LocalGgufClient(BaseAiProvider):
                 max_tokens=safe_max_tokens,
             )
             raw_content = response["choices"][0]["message"].get("content", "") if response and "choices" in response else ""
-            log_debug(f"Stage 2 linking response received (len={len(raw_content)} chars): {raw_content[:400]}")
+            log_debug(f"Stage 2 legacy linking response received (len={len(raw_content)} chars): {raw_content[:400]}")
             pairs = self._parse_links_json(raw_content)
             log_debug(f"Discovered {len(pairs)} raw link pairs from global linking pass.")
 
             return AiResponseParser.attach_links_to_notes(notes, pairs)
 
         except Exception as e:
-            log_error(f"Stage 2 global linking failed (non-fatal, continuing with notes without links): {e}\n{traceback.format_exc()}")
+            log_error(f"Stage 2 legacy linking failed (non-fatal, continuing with notes without links): {e}\n{traceback.format_exc()}")
             return notes
 
         return notes

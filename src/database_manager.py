@@ -8,6 +8,7 @@ import os
 import threading
 from datetime import datetime
 from typing import Optional, List, Tuple, Set, Dict, Any
+import numpy as np
 from logger import log_error, log_debug
 from models import Note, NoteMetadata, NoteLink
 from settings_manager import SettingsManager
@@ -71,6 +72,17 @@ class DatabaseManager:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_source ON note_links(source_note_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_target ON note_links(target_note_id);")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS note_embeddings (
+                note_id TEXT PRIMARY KEY,
+                vector BLOB NOT NULL,
+                dimensions INTEGER NOT NULL,
+                model_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_model ON note_embeddings(model_id);")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -395,8 +407,14 @@ class DatabaseManager:
             log_error(f"Database error during bulk insert links: {e}")
             raise e
 
-    def bulk_insert_notes_and_links(self, notes_data: List[Tuple], links_data: List[Tuple[str, str]]) -> None:
-        """Batch inserts note and link tuples atomically within a single transaction."""
+    def bulk_insert_notes_and_links(
+        self,
+        notes_data: List[Tuple],
+        links_data: List[Tuple[str, str]],
+        embeddings_data: Optional[Dict[str, Any]] = None,
+        embedding_model_id: str = "harrier-oss-v1-0.6b"
+    ) -> None:
+        """Batch inserts note and link tuples (and optional embeddings) atomically within a single transaction."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -410,8 +428,84 @@ class DatabaseManager:
                         INSERT OR IGNORE INTO note_links (source_note_id, target_note_id)
                         VALUES (?, ?)
                     """, links_data)
+                if embeddings_data:
+                    now = datetime.now().isoformat()
+                    emb_records = []
+                    for nid, vec in embeddings_data.items():
+                        vec_arr = np.asarray(vec, dtype=np.float32)
+                        emb_records.append((str(nid), vec_arr.tobytes(), len(vec_arr), embedding_model_id, now))
+                    cursor.executemany("""
+                        INSERT OR REPLACE INTO note_embeddings (note_id, vector, dimensions, model_id, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, emb_records)
         except sqlite3.Error as e:
             log_error(f"Database error during atomic bulk insert notes and links: {e}")
+            raise e
+
+    def save_note_embeddings(self, embeddings_map: Dict[str, Any], model_id: str = "harrier-oss-v1-0.6b") -> None:
+        """Saves or updates note embeddings in batch."""
+        if not embeddings_map:
+            return
+        now = datetime.now().isoformat()
+        records = []
+        for note_id, vec in embeddings_map.items():
+            vec_arr = np.asarray(vec, dtype=np.float32)
+            records.append((str(note_id), vec_arr.tobytes(), len(vec_arr), model_id, now))
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.executemany("""
+                    INSERT OR REPLACE INTO note_embeddings (note_id, vector, dimensions, model_id, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, records)
+        except sqlite3.Error as e:
+            log_error(f"Database error during save note embeddings: {e}")
+            raise e
+
+    def get_note_embedding(self, note_id: str) -> Optional[np.ndarray]:
+        """Retrieves a single note embedding vector as a float32 numpy array."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT vector FROM note_embeddings WHERE note_id = ?", (str(note_id),))
+            row = cursor.fetchone()
+            if row and row[0]:
+                return np.frombuffer(row[0], dtype=np.float32)
+            return None
+        except sqlite3.Error as e:
+            log_error(f"Database error getting note embedding for '{note_id}': {e}")
+            return None
+
+    def get_all_note_embeddings(self, model_id: Optional[str] = None) -> Dict[str, np.ndarray]:
+        """Returns all stored note embeddings as a dictionary {note_id: np.ndarray}."""
+        try:
+            cursor = self.conn.cursor()
+            if model_id:
+                cursor.execute("SELECT note_id, vector FROM note_embeddings WHERE model_id = ?", (model_id,))
+            else:
+                cursor.execute("SELECT note_id, vector FROM note_embeddings")
+            rows = cursor.fetchall()
+            return {
+                row[0]: np.frombuffer(row[1], dtype=np.float32)
+                for row in rows
+                if row[1] is not None
+            }
+        except sqlite3.Error as e:
+            log_error(f"Database error getting all note embeddings: {e}")
+            return {}
+
+    def delete_note_embeddings(self, note_ids: List[str]) -> None:
+        """Deletes note embeddings for specific note IDs."""
+        if not note_ids:
+            return
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.executemany(
+                    "DELETE FROM note_embeddings WHERE note_id = ?",
+                    [(str(nid),) for nid in note_ids]
+                )
+        except sqlite3.Error as e:
+            log_error(f"Database error deleting note embeddings: {e}")
             raise e
 
     def close_connection(self) -> None:

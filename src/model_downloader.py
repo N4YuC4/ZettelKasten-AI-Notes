@@ -29,6 +29,11 @@ class DownloadStatus:
     error_message: Optional[str] = None
     retry_count: int = 0
 
+    @property
+    def message(self) -> str:
+        """Backward-compatible alias for status_text or error_message."""
+        return self.status_text or self.error_message or ""
+
 
 def format_eta(seconds: Optional[int]) -> str:
     """Formats seconds into human-readable ETA string."""

@@ -31,7 +31,12 @@ class GeminiRateLimitError(GeminiApiError):
 import time
 from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from ai_response_parser import AiResponseParser
-from prompt_templates import build_note_extraction_prompt, build_graph_linking_prompt
+from prompt_templates import (
+    build_note_extraction_prompt,
+    build_graph_linking_prompt,
+    build_candidate_pairs_verification_prompt,
+    partition_candidate_pairs,
+)
 from ai_provider import BaseAiProvider
 import semantic_chunker
 
@@ -195,6 +200,7 @@ class GeminiApiClient(BaseAiProvider):
                     if not unified_general_title and note.get("general_title"):
                         unified_general_title = note["general_title"].strip()
 
+                    note["_chunk_id"] = idx
                     title = note.get("title", "").strip()
                     title_key = title.lower()
                     if title_key and title_key not in seen_titles:
@@ -243,13 +249,17 @@ class GeminiApiClient(BaseAiProvider):
     def generate_note_links(
         self,
         notes: List[Dict[str, Any]],
-        on_progress: Optional[Callable[[str], None]] = None
+        on_progress: Optional[Callable[[str], None]] = None,
+        similarity_threshold: Optional[float] = None,
+        semantic_memory_service: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """
         Stage 2 of the Two-Stage Pipeline: Global Knowledge Graph Linking using Gemini API.
-        Takes the complete set of notes generated in Stage 1 with full titles and contents.
-        Queries Gemini with the numbered notes map to discover genuine conceptual connections.
-        Attaches discovered connections directly to each note's 'connections' list using AiResponseParser.
+        When SemanticMemoryService (Microsoft Harrier 0.6B) is available:
+        Performs Pure Semantic Vector Linking using statistical Z-score dynamic thresholding
+        (threshold = max(quality_floor, mean + 1.8 * std)), establishing genuine knowledge graph
+        connections in milliseconds with 0 Gemini API calls.
+        Falls back to legacy direct Gemini prompt if the local embedding model is not yet installed.
         """
         if not notes or len(notes) <= 1:
             return notes
@@ -258,7 +268,36 @@ class GeminiApiClient(BaseAiProvider):
         if on_progress:
             on_progress("Analyzing conceptual links between notes...")
 
-        # Prepare numbered notes export for prompt input
+        # 1. Attempt Pure Semantic Linking via SemanticMemoryService
+        memory_service = semantic_memory_service
+        if memory_service is None:
+            try:
+                from semantic_memory_service import SemanticMemoryService
+                memory_service = SemanticMemoryService()
+            except Exception as e:
+                log_debug(f"SemanticMemoryService init error in Gemini client: {e}")
+                memory_service = None
+
+        if memory_service and memory_service.is_model_available():
+            try:
+                if on_progress:
+                    on_progress("Computing semantic connections with Harrier embedding...")
+                link_pairs, embeddings, eff_threshold = memory_service.compute_semantic_links(
+                    notes, similarity_threshold=similarity_threshold, cross_chunk_only=True
+                )
+                if embeddings is not None and len(embeddings) == len(notes):
+                    for idx, note in enumerate(notes):
+                        note["_embedding"] = embeddings[idx]
+
+                log_debug(
+                    f"Gemini Stage 2 pure semantic linking discovered {len(link_pairs)} connections "
+                    f"(effective threshold: {eff_threshold:.4f}). Attaching links..."
+                )
+                return AiResponseParser.attach_links_to_notes(notes, link_pairs)
+            except Exception as e:
+                log_error(f"Semantic linking error in Gemini client (falling back to direct prompt): {e}")
+
+        # Fallback legacy prompt (if embedding model is not yet installed or failed)
         full_notes_payload = [
             {
                 "id": idx + 1,
@@ -269,7 +308,6 @@ class GeminiApiClient(BaseAiProvider):
             if n.get("title")
         ]
 
-        # Safety ceiling if massive document note payload exceeds comfortable limits
         notes_json_str = json.dumps(full_notes_payload, ensure_ascii=False, indent=2)
         if len(notes_json_str) > 100_000:
             full_notes_payload = [
@@ -290,15 +328,17 @@ class GeminiApiClient(BaseAiProvider):
                 contents=user_prompt,
             )
             raw_content = response.text if response and hasattr(response, 'text') and response.text else ""
-            log_debug(f"Gemini Stage 2 linking response received (len={len(raw_content)} chars): {raw_content[:400]}")
+            log_debug(f"Gemini Stage 2 legacy linking response received (len={len(raw_content)} chars): {raw_content[:400]}")
             pairs = AiResponseParser.parse_links_json(raw_content)
-            log_debug(f"Discovered {len(pairs)} raw link pairs from Gemini linking pass.")
+            log_debug(f"Discovered {len(pairs)} raw link pairs from Gemini legacy linking pass.")
 
             return AiResponseParser.attach_links_to_notes(notes, pairs)
 
         except Exception as e:
-            log_error(f"Gemini Stage 2 global linking failed (non-fatal, continuing with notes without links): {e}\n{traceback.format_exc()}")
+            log_error(f"Gemini Stage 2 legacy linking failed (non-fatal, continuing with notes without links): {e}\n{traceback.format_exc()}")
             return notes
+
+        return notes
 
 # This block provides an example usage when the file is run directly (for testing purposes).
 if __name__ == '__main__':

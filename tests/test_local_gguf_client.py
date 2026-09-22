@@ -418,7 +418,9 @@ def test_generate_note_links_full_content_and_attachment():
         {"title": "PHP Data Types", "content": "Types such as string, integer, and boolean are supported.", "connections": []}
     ]
 
-    result = client.generate_note_links(notes)
+    mock_no_mem = MagicMock()
+    mock_no_mem.is_model_available.return_value = False
+    result = client.generate_note_links(notes, semantic_memory_service=mock_no_mem)
 
     # Check that LLM received full content
     call_args = mock_llm.create_chat_completion.call_args[1]
@@ -436,6 +438,42 @@ def test_generate_note_links_full_content_and_attachment():
     assert call_args["max_tokens"] >= 4096
 
 
+def test_generate_note_links_with_semantic_memory_service():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    client.n_ctx = 16384
+    mock_llm = MagicMock()
+    client.llm = mock_llm
+
+    notes = [
+        {"id": 1, "title": "Solow Model", "content": "Capital accumulation", "connections": []},
+        {"id": 2, "title": "Beta Convergence", "content": "Catching up process", "connections": []},
+        {"id": 3, "title": "Quantum Spin", "content": "Unrelated physics concept", "connections": []}
+    ]
+
+    mock_memory = MagicMock()
+    mock_memory.is_model_available.return_value = True
+    import numpy as np
+    dummy_emb = np.ones((3, 1024), dtype=np.float32)
+    # Pure vector linking returns (1, 2) directly above dynamic threshold
+    mock_memory.compute_semantic_links.return_value = ([(1, 2)], dummy_emb, 0.78)
+
+    linked = client.generate_note_links(notes, semantic_memory_service=mock_memory)
+
+    # ZERO LLM calls made!
+    mock_llm.create_chat_completion.assert_not_called()
+
+    # Check embedding attached to notes for DB saving
+    assert "_embedding" in linked[0]
+    assert len(linked[0]["_embedding"]) == 1024
+
+    # Bidirectional connections established via pure vector linking
+    assert "Beta Convergence" in linked[0]["connections"]
+    assert "Solow Model" in linked[1]["connections"]
+    assert "Quantum Spin" not in linked[0]["connections"]
+
+
+
+
 def test_generate_note_links_max_tokens_floor_4k():
     client = LocalGgufClient.__new__(LocalGgufClient)
     client.n_ctx = 8192
@@ -449,7 +487,9 @@ def test_generate_note_links_max_tokens_floor_4k():
         {"title": f"Note {i}", "content": "Detailed discourse on concepts."}
         for i in range(20)
     ]
-    client.generate_note_links(notes)
+    mock_no_mem = MagicMock()
+    mock_no_mem.is_model_available.return_value = False
+    client.generate_note_links(notes, semantic_memory_service=mock_no_mem)
 
     call_args = mock_llm.create_chat_completion.call_args[1]
     assert call_args["max_tokens"] >= 4096
@@ -648,7 +688,9 @@ def test_generate_note_links_with_integer_ids():
         {"title": "Concept C", "content": "Description C", "connections": []}
     ]
 
-    linked_notes = client.generate_note_links(notes)
+    mock_no_mem = MagicMock()
+    mock_no_mem.is_model_available.return_value = False
+    linked_notes = client.generate_note_links(notes, semantic_memory_service=mock_no_mem)
     assert len(linked_notes) == 3
     assert "Concept B" in linked_notes[0]["connections"]
     assert "Concept A" in linked_notes[1]["connections"]
@@ -677,7 +719,9 @@ def test_generate_note_links_with_string_digits():
         {"title": "Beta", "content": "Desc Beta", "connections": []}
     ]
 
-    linked_notes = client.generate_note_links(notes)
+    mock_no_mem = MagicMock()
+    mock_no_mem.is_model_available.return_value = False
+    linked_notes = client.generate_note_links(notes, semantic_memory_service=mock_no_mem)
     assert "Beta" in linked_notes[0]["connections"]
     assert "Alpha" in linked_notes[1]["connections"]
 
@@ -703,7 +747,9 @@ def test_generate_note_links_with_parenthetical_stripped_fallback():
         {"title": "Candidate Generation Process ($G$)", "content": "Desc 2", "connections": []}
     ]
 
-    linked_notes = client.generate_note_links(notes)
+    mock_no_mem = MagicMock()
+    mock_no_mem.is_model_available.return_value = False
+    linked_notes = client.generate_note_links(notes, semantic_memory_service=mock_no_mem)
     assert "Candidate Generation Process ($G$)" in linked_notes[0]["connections"]
     assert "Collapse Mechanism (Boltzmann-Softmax)" in linked_notes[1]["connections"]
 
@@ -781,12 +827,14 @@ def test_generate_note_links_universal_language_agnostic_prompt():
         {"title": "Çökme Mekanizması", "content": "Kuantum durumunun deterministik indirgenmesi.", "connections": []},
         {"title": "Gözlemci Etkisi", "content": "Gözlemci ile gözlenen sistem arasındaki etkileşim.", "connections": []}
     ]
-    linked_notes = client.generate_note_links(notes)
+    mock_no_mem = MagicMock()
+    mock_no_mem.is_model_available.return_value = False
+    linked_notes = client.generate_note_links(notes, semantic_memory_service=mock_no_mem)
     call_prompt = mock_llm.create_chat_completion.call_args[1]["messages"][1]["content"]
 
-    assert "Below are all Zettelkasten notes extracted from the document" in call_prompt
+    assert ("Below are all Zettelkasten notes" in call_prompt or "Below are the notes and semantically matched candidate pairs" in call_prompt)
     assert "RULES:" in call_prompt
-    assert '"source": 1, "target": 2' in call_prompt
+    assert '"target":' in call_prompt
     assert "Gözlemci Etkisi" in linked_notes[0]["connections"]
     assert "Çökme Mekanizması" in linked_notes[1]["connections"]
 
