@@ -57,7 +57,7 @@ class LocalGgufClient(BaseAiProvider):
     _cached_n_ctx: Optional[int] = None
     _cached_n_gpu_layers: Optional[int] = None
 
-    DEFAULT_CONTEXT_WINDOW: int = 131072
+    DEFAULT_CONTEXT_WINDOW: int = 16384
     n_ctx: int = DEFAULT_CONTEXT_WINDOW
     n_gpu_layers: int = -1
     _explicit_n_ctx: bool = False
@@ -68,7 +68,8 @@ class LocalGgufClient(BaseAiProvider):
         n_ctx: Optional[int] = None,
         n_gpu_layers: int = -1,
         n_threads: Optional[int] = None,
-        text_content: Optional[str] = None
+        text_content: Optional[str] = None,
+        use_speculative: bool = False
     ):
         if not model_path or not os.path.exists(model_path):
             raise LocalModelNotFoundError(
@@ -272,14 +273,18 @@ class LocalGgufClient(BaseAiProvider):
         existing_titles: Optional[List[str]] = None,
         unified_general_title: Optional[str] = None,
         custom_system_prompt: Optional[str] = None,
+        rag_notes: Optional[List[Dict[str, Any]]] = None,
+        global_concept_map: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Executes a single LLM chat completion on chunk_text with optional chained context."""
+        """Executes a single LLM chat completion on chunk_text with optional Two-Tier RAG context."""
         user_prompt = build_note_extraction_prompt(
             chunk_text=chunk_text,
             previous_notes_json=previous_notes_json,
             existing_titles=existing_titles,
             unified_general_title=unified_general_title,
             custom_system_prompt=custom_system_prompt,
+            rag_notes=rag_notes,
+            global_concept_map=global_concept_map,
         )
 
         messages = [
@@ -290,7 +295,8 @@ class LocalGgufClient(BaseAiProvider):
         # Estimate prompt tokens and dynamically calculate safe max_tokens so we do not exceed n_ctx
         prompt_tokens = self._count_tokens(user_prompt) + 300
         remaining_ctx = max(512, self.n_ctx - prompt_tokens - 100)
-        safe_max_tokens = min(4096, remaining_ctx)
+        output_cap = 2048 if self.n_ctx <= 8192 else 4096
+        safe_max_tokens = min(output_cap, remaining_ctx)
 
         log_debug(f"Executing local GGUF inference (input length: {len(chunk_text)} chars, max_tokens: {safe_max_tokens})...")
 
@@ -316,6 +322,9 @@ class LocalGgufClient(BaseAiProvider):
 
         parsed_notes = self._parse_notes_json(content)
         if not parsed_notes and content.strip():
+            if AiResponseParser.is_valid_empty_notes_response(content):
+                log_debug("Local LLM explicitly returned valid empty notes array (no new concepts in chunk).")
+                return []
             log_error(f"Failed to parse notes from local LLM response: {content[:300]}")
             raise LocalLlmError(f"Failed to parse local model output: {content[:200]}")
 
@@ -326,10 +335,13 @@ class LocalGgufClient(BaseAiProvider):
         text_content: str,
         on_progress: Optional[Callable[[str], None]] = None,
         custom_system_prompt: Optional[str] = None,
+        semantic_memory_service: Optional[Any] = None,
+        reranker_service: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generates Zettelkasten-style atomic notes from text content using the local GGUF model.
-        Automatically chunks long documents if token count exceeds prompt token budget.
+        Uses an in-memory vector RAG pool (NoteRagPool) with Two-Tier retrieval (Global Concept Map + Reranked Focal Notes).
+        Strictly calibrated and compatible with 8k (8192) context windows.
         Returns:
             list of dicts containing 'general_title', 'title', 'content', 'connections'
         """
@@ -345,58 +357,66 @@ class LocalGgufClient(BaseAiProvider):
         if not sanitized_text:
             return []
 
-        # Dynamically adapt context window to document demand if not explicitly fixed
-        if not getattr(self, "_explicit_n_ctx", False) and os.path.exists(getattr(self, "model_path", "")):
-            recommended_ctx = HardwareChecker.calculate_adaptive_context_window(
-                text_content=sanitized_text,
-                model_path=self.model_path,
-                model_max_ctx=self.DEFAULT_CONTEXT_WINDOW
-            )
-            if recommended_ctx > self.n_ctx:
-                log_debug(f"Document demand requires expanding context window: {self.n_ctx} -> {recommended_ctx}")
-                self.n_ctx = recommended_ctx
-                self.llm = self._get_or_load_model()
+        # Enforce mandatory embedding service & reranker service & initialize RAG pool
+        from note_rag_pool import NoteRagPool
+        from semantic_memory_service import SemanticMemoryService
+        from reranker_service import RerankerService
 
-        # Dynamic chunk budget: dynamically scales with model's actual context window (e.g. 32k or 128k)
-        max_output_tokens = 4096
-        system_overhead_tokens = 600
-        safety_margin = 250
-        previous_json_budget = 2500
-        safe_ctx_budget = max(1024, self.n_ctx - max_output_tokens - system_overhead_tokens - safety_margin - previous_json_budget)
+        memory_service = semantic_memory_service or SemanticMemoryService()
+        rank_service = reranker_service or RerankerService()
+        rag_pool = NoteRagPool(
+            semantic_memory_service=memory_service,
+            reranker_service=rank_service,
+            count_tokens_fn=self._count_tokens,
+            ai_provider=self
+        )
 
-        # Enforce universal safe chunk ceiling: balances depth with token budget
-        MAX_SAFE_EXTRACTION_CHUNK_TOKENS = semantic_chunker.DEFAULT_EXTRACTION_CHUNK_TOKENS
-        max_prompt_tokens = min(safe_ctx_budget, MAX_SAFE_EXTRACTION_CHUNK_TOKENS)
+        # Dynamic context and token budget: strictly fixed and calibrated for 16K (16,384) context windows
+        # Exact 16K allocation:
+        # 6000 (source chunk) + 5200 (Two-Tier RAG) + 4096 (output generation) + 688 (system instructions) + 400 (safety area) = 16,384 tokens
+        is_small_ctx = (self.n_ctx <= 8192)
+        max_output_tokens = 2048 if is_small_ctx else 4096
+        system_overhead_tokens = 500 if is_small_ctx else 688
+        safety_margin = 250 if is_small_ctx else 400
+        rag_context_budget = 2400 if is_small_ctx else 5200
+
+        safe_ctx_budget = max(
+            1024,
+            self.n_ctx - max_output_tokens - system_overhead_tokens - safety_margin - rag_context_budget
+        )
+        max_prompt_tokens = min(safe_ctx_budget, 2800 if is_small_ctx else semantic_chunker.DEFAULT_EXTRACTION_CHUNK_TOKENS)
+
+        # Single pass budget (when no RAG reference context is required):
+        single_pass_budget = max(
+            max_prompt_tokens,
+            self.n_ctx - max_output_tokens - system_overhead_tokens - safety_margin
+        )
 
         total_tokens = self._count_tokens(sanitized_text)
         log_debug(
             f"Input text: {len(sanitized_text)} chars (~{total_tokens} tokens). "
-            f"Model context: {self.n_ctx} tokens (safe prompt budget: {max_prompt_tokens} tokens)."
+            f"Model context: {self.n_ctx} tokens (single-pass budget: {single_pass_budget}, chunk budget: {max_prompt_tokens} tokens, RAG budget: {rag_context_budget})."
         )
 
-        # 1. Single pass if within context budget
-        if total_tokens <= max_prompt_tokens:
+        # 1. Single pass if within single-pass budget
+        if total_tokens <= single_pass_budget:
             if on_progress:
                 on_progress("AI is extracting notes...")
             return self._execute_inference(sanitized_text, custom_system_prompt=custom_system_prompt)
 
-        # 2. Document exceeds budget -> semantic chunking with Chained JSON Context
+        # 2. Document exceeds budget -> semantic chunking with vector RAG pool
         log_debug(
-            f"Document size (~{total_tokens} tokens) exceeds single-pass budget ({max_prompt_tokens} tokens). "
-            "Splitting document into semantic chunks with chained context..."
+            f"Document size (~{total_tokens} tokens) exceeds single-pass budget ({single_pass_budget} tokens). "
+            f"Splitting document into semantic chunks ({max_prompt_tokens} tokens max) with vector RAG pool ({rag_context_budget} tokens)..."
         )
         chunks = self._chunk_text(
             sanitized_text,
             max_chunk_tokens=max_prompt_tokens,
             overlap_tokens=semantic_chunker.DEFAULT_OVERLAP_TOKENS
         )
-        log_debug(f"Document split into {len(chunks)} chunks for sequential chained processing.")
+        log_debug(f"Document split into {len(chunks)} chunks for sequential RAG processing.")
 
-        all_notes: List[Dict[str, Any]] = []
-        seen_titles: Set[str] = set()
-        all_seen_titles_list: List[str] = []
         unified_general_title: Optional[str] = None
-        previous_chunk_json: Optional[str] = None
 
         for idx, chunk in enumerate(chunks):
             progress_msg = f"AI is extracting notes (Part {idx + 1}/{len(chunks)})..."
@@ -404,10 +424,17 @@ class LocalGgufClient(BaseAiProvider):
             if on_progress:
                 on_progress(progress_msg)
             try:
+                # Retrieve two-tier context: Tier 1 global concept map + Tier 2 reranked focal notes
+                tier1_concepts, tier2_focal_notes = rag_pool.retrieve_two_tier_context(
+                    query_chunk=chunk,
+                    total_budget=rag_context_budget,
+                    top_k_focal=4 if is_small_ctx else 8
+                )
                 chunk_notes = self._execute_inference(
                     chunk_text=chunk,
-                    previous_notes_json=previous_chunk_json,
-                    existing_titles=all_seen_titles_list if all_seen_titles_list else None,
+                    rag_notes=tier2_focal_notes if tier2_focal_notes else None,
+                    global_concept_map=tier1_concepts if tier1_concepts else None,
+                    existing_titles=rag_pool.get_all_titles() if len(rag_pool) > 0 and not tier1_concepts else None,
                     unified_general_title=unified_general_title,
                     custom_system_prompt=custom_system_prompt,
                 )
@@ -417,41 +444,19 @@ class LocalGgufClient(BaseAiProvider):
                         unified_general_title = note["general_title"].strip()
 
                     note["_chunk_id"] = idx
-                    title = note.get("title", "").strip()
-                    title_key = title.lower()
-                    if title_key and title_key not in seen_titles:
-                        seen_titles.add(title_key)
-                        all_seen_titles_list.append(title)
-                        all_notes.append(note)
-                        new_chunk_notes.append(note)
-                    elif not title_key:
-                        all_notes.append(note)
-                        new_chunk_notes.append(note)
+                    new_chunk_notes.append(note)
 
-                # Prepare previous_chunk_json for the subsequent chunk (pure concept reference: id, title, brief content)
-                # Never include 'connections' or link arrays to prevent prompt leakage and phantom linking hallucinations
+                # Collect new notes into RAG pool (indexes embeddings immediately)
                 if new_chunk_notes:
-                    ref_notes = [
-                        {
-                            "id": n.get("id", i + 1),
-                            "title": n.get("title", ""),
-                            "content": (n.get("content", "")[:250] + "...") if len(n.get("content", "")) > 250 else n.get("content", "")
-                        }
-                        for i, n in enumerate(new_chunk_notes)
-                        if n.get("title")
-                    ]
-                    clean_export = {
-                        "general_title": unified_general_title or "",
-                        "notes": ref_notes
-                    }
-                    previous_chunk_json = json.dumps(clean_export, ensure_ascii=False, indent=2)
+                    rag_pool.add_notes(new_chunk_notes)
 
             except Exception as ce:
                 log_error(f"Error processing chunk {idx + 1}/{len(chunks)}: {ce}")
-                if not all_notes and idx == len(chunks) - 1:
+                if len(rag_pool) == 0 and idx == len(chunks) - 1:
                     raise
 
-        # Guarantee sequential global 1-based unique IDs across all chunks
+        # Retrieve all accumulated notes from RAG pool
+        all_notes = rag_pool.get_all_notes()
         for idx, note in enumerate(all_notes):
             note["id"] = idx + 1
             if unified_general_title:
@@ -497,6 +502,11 @@ class LocalGgufClient(BaseAiProvider):
 
         if memory_service and memory_service.is_model_available():
             try:
+                # Ensure notes are consolidated & deduplicated before computing knowledge graph links
+                if hasattr(memory_service, "consolidate_and_deduplicate_notes"):
+                    deduped = memory_service.consolidate_and_deduplicate_notes(notes, ai_provider=self)
+                    if isinstance(deduped, list) and (not deduped or isinstance(deduped[0], dict)):
+                        notes = deduped
                 if on_progress:
                     on_progress("Computing semantic connections with Harrier embedding...")
                 link_pairs, embeddings, eff_threshold = memory_service.compute_semantic_links(
@@ -573,3 +583,44 @@ class LocalGgufClient(BaseAiProvider):
             return notes
 
         return notes
+
+    def synthesize_note_cluster(
+        self,
+        cluster_notes: List[Dict[str, Any]],
+        on_progress: Optional[Callable[[str], None]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Synthesizes an N-way duplicate cluster into a single cohesive note via local GGUF model."""
+        if not cluster_notes or len(cluster_notes) < 2:
+            return cluster_notes[0] if cluster_notes else None
+
+        from prompt_templates import SYSTEM_INSTRUCTION_SYNTHESIS, build_note_synthesis_prompt
+
+        prompt = build_note_synthesis_prompt(cluster_notes)
+        log_debug(f"LocalGgufClient: Executing N-way synthesis for {len(cluster_notes)} notes...")
+        if on_progress:
+            on_progress(f"Synthesizing {len(cluster_notes)} overlapping notes into unified concept...")
+
+        messages = [
+            {"role": "system", "content": SYSTEM_INSTRUCTION_SYNTHESIS},
+            {"role": "user", "content": prompt}
+        ]
+
+        try:
+            response = self.llm.create_chat_completion(
+                messages=messages,
+                temperature=0.2,
+                repeat_penalty=1.1,
+                top_p=0.95,
+                max_tokens=4096,
+            )
+            if response and "choices" in response and response["choices"]:
+                raw_content = response["choices"][0]["message"].get("content", "")
+                if raw_content:
+                    parsed = AiResponseParser.parse_synthesized_note(raw_content)
+                    if parsed:
+                        log_debug(f"LocalGgufClient: Successfully synthesized cluster into '{parsed['title']}'")
+                        return parsed
+        except Exception as e:
+            log_error(f"LocalGgufClient: Failed to synthesize note cluster: {e}\n{traceback.format_exc()}")
+
+        return None

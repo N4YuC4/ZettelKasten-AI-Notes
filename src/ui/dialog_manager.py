@@ -842,10 +842,12 @@ class DialogManager:
 
             generation_models = [m for m in all_models if m.model_type == "generation"]
             embedding_models = [m for m in all_models if m.model_type == "embedding"]
+            reranker_models = [m for m in all_models if m.model_type == "reranker"]
 
             groups = [
                 ("Text Generation Models", generation_models),
-                ("Semantic Memory & Linking Models", embedding_models)
+                ("Semantic Memory & Linking Models", embedding_models),
+                ("Cross-Encoder Reranker Models", reranker_models),
             ]
 
             for group_title, group_models in groups:
@@ -917,7 +919,7 @@ class DialogManager:
                             )
                         )
                     elif is_downloaded:
-                        if model.model_type == "embedding":
+                        if model.model_type in ("embedding", "reranker"):
                             action_row.controls.append(
                                 ft.Container(
                                     content=ft.Row([
@@ -957,7 +959,7 @@ class DialogManager:
                             return lambda e: (
                                 LocalGgufClient.unload_cached_model(),
                                 ModelDownloader.delete_model(m_item, models_dir),
-                                on_model_deleted(m_item.id) if (on_model_deleted and m_item.model_type != "embedding") else None,
+                                on_model_deleted(m_item.id) if (on_model_deleted and m_item.model_type == "generation") else None,
                                 refresh_models_list()
                             )
 

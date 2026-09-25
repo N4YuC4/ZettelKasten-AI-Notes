@@ -611,10 +611,240 @@ def test_meta_syntax_placeholders_and_empty_notes_dropped():
     assert notes[0]["title"] == "Valid Concept"
 
 
+def test_is_valid_empty_notes_response():
+    # 1. Valid empty notes responses
+    valid_empty_1 = '{"general_title": "Physics", "notes": []}'
+    valid_empty_2 = '```json\n{"general_title": "Economics", "conceptual_analysis": {"core_thesis": "Test"}, "notes": []}\n```'
+    valid_empty_3 = '<think>Analysis here...</think>\n{"notes": []}'
+    valid_empty_4 = '{"items": []}'
+    valid_empty_5 = '[]'
+
+    assert AiResponseParser.is_valid_empty_notes_response(valid_empty_1) is True
+    assert AiResponseParser.is_valid_empty_notes_response(valid_empty_2) is True
+    assert AiResponseParser.is_valid_empty_notes_response(valid_empty_3) is True
+    assert AiResponseParser.is_valid_empty_notes_response(valid_empty_4) is True
+    assert AiResponseParser.is_valid_empty_notes_response(valid_empty_5) is True
+
+    # 2. Non-empty notes responses
+    non_empty = '{"notes": [{"title": "Concept", "content": "Content"}]}'
+    assert AiResponseParser.is_valid_empty_notes_response(non_empty) is False
+
+    # 3. Invalid syntax or arbitrary strings
+    assert AiResponseParser.is_valid_empty_notes_response("I cannot answer this.") is False
+    assert AiResponseParser.is_valid_empty_notes_response("") is False
+    assert AiResponseParser.is_valid_empty_notes_response(None) is False
 
 
+def test_synthesize_note_contents_preserves_unique_details():
+    # 1. Identical notes -> No duplication, untouched
+    n1 = "# Lightness\n\nLightness L* calculation fails in low luminance regions.\n\n## Related Notes\n- [[CMC]]"
+    n2 = "# Lightness\n\nLightness L* calculation fails in low luminance regions.\n\n## Related Notes\n- [[Other]]"
+    res1 = AiResponseParser.synthesize_note_contents(n1, n2)
+    assert "###" not in res1
+    assert res1.strip() == n1.strip()
+
+    # 2. Duplicate note with complementary unique knowledge -> Novel details synthesized
+    n_base = "# Yüzey Pürüzlülüğü Etkisi\n\nTekstil kumaşlarındaki mikro gölgeler spektrofotometre okumalarında hataya yol açar.\n\n## Related Notes\n- [[CMC]]"
+    n_incoming = "# Yüzey Pürüzlülüğü\n\nTekstil kumaşlarındaki mikro gölgeler spektrofotometre okumalarında varyansa yol açar.\n\nAyrıca otomotiv boyalarındaki portakal kabuğu efekti (orange peel) de ölçümlerde benzer dalgalanmalara neden olur.\n\n## Related Notes\n- [[Boya]]"
+
+    res2 = AiResponseParser.synthesize_note_contents(n_base, n_incoming)
+    assert "### Ek Gözlemler ve Tamamlayıcı Detaylar" in res2
+    assert "orange peel" in res2
+    assert "## Related Notes" in res2
+    # Verify related notes still at the end
+    assert res2.endswith("- [[CMC]]") or "- [[CMC]]" in res2
 
 
+def test_parse_synthesized_note_json_and_markdown():
+    # 1. Clean JSON response
+    payload_json = """
+    ```json
+    {
+      "title": "CIEDE2000 Parlaklık Analizi",
+      "content": "Karanlık bölgelerde formül yetersiz kalır.",
+      "connections": ["CMC Formülü", "[1]"]
+    }
+    ```
+    """
+    res = AiResponseParser.parse_synthesized_note(payload_json)
+    assert res is not None
+    assert res["title"] == "CIEDE2000 Parlaklık Analizi"
+    assert res["content"] == "Karanlık bölgelerde formül yetersiz kalır."
+    assert res["connections"] == ["CMC Formülü"]  # [1] citation filtered out!
+
+    # 2. Raw Markdown fallback response
+    payload_md = """
+    # Birleşik Konsept
+
+    Bu içerik birleşik konseptin gövdesidir.
+
+    ## Related Notes
+    - [[Kromatik Düzenleme]]
+    """
+    res_md = AiResponseParser.parse_synthesized_note(payload_md)
+    assert res_md is not None
+    assert res_md["title"] == "Birleşik Konsept"
+    assert "Bu içerik birleşik konseptin gövdesidir." in res_md["content"]
+    assert "Kromatik Düzenleme" in res_md["connections"]
+
+
+def test_char_ngram_overlap_multilingual():
+    """Tests language-agnostic character n-gram overlap on agglutinative suffixes."""
+    # Turkish suffix variations:
+    # "Ayrım boşluğunun bulunmaması..." vs "Ayrım boşluğu bulunmadığında..."
+    s1 = "Ayrım boşluğunun bulunmaması insan gözünün parlaklık ve ton algı hassasiyetini belirgin şekilde artırır."
+    s2 = "Ayrım boşluğu bulunmadığında gözün parlaklık ve ton algı hassasiyetinde belirgin bir artış görülür."
+
+    # Naive word token overlap drops significantly due to suffixes
+    w1 = set(AiResponseParser.normalize_tokens(s1))
+    w2 = set(AiResponseParser.normalize_tokens(s2))
+    tok_overlap = len(w1 & w2) / max(1, min(len(w1), len(w2)))
+    assert tok_overlap < 0.50
+
+    # Character n-gram overlap captures the morphological roots cleanly (>0.60)
+    char_overlap = AiResponseParser.char_ngram_overlap(s1, s2, n=4)
+    assert char_overlap > 0.60
+
+    # Completely dissimilar text should have near zero 4-gram overlap (<0.10)
+    s_diff = "Kuantum dalga fonksiyonu Hilbert uzayında izole parçacığın olasılık genliğini betimler."
+    assert AiResponseParser.char_ngram_overlap(s1, s_diff, n=4) < 0.10
+
+
+def test_is_duplicate_concept_precision_and_recall():
+    """
+    Verifies that is_duplicate_concept strictly distinguishes autonomous domain concepts
+    while reliably merging genuine duplicate re-articulations.
+    """
+    body_ciede = "CIEDE2000 formülü, CIE tarafından standartlaştırılmış renk farkı metriğidir. Parlaklık, kroma ve ton sapmalarını hesaplar. " * 3
+    body_cmc = "CMC (l:c) formülü, 1984 yılında Colour Measurement Committee tarafından geliştirilmiş tekstil tolerans metriğidir. " * 3
+    body_gap = "Renk numuneleri arasında fiziksel ayrım boşluğu bulunmadığında insan gözünün algı hassasiyeti belirgin artar. " * 3
+    body_3d = "Üç boyutlu kavisli yüzeyler ve geometrik nesneler ışığı düzlemsel numunelerden farklı saçarak algıyı etkiler. " * 3
+    body_textile = "Tekstil endüstrisinde kumaş dokusu, lif yönü ve yüzey pürüzlülüğü spektrofotometre ölçümlerinde varyans yaratır. " * 3
+    body_math = "Matematiksel süreksizlikler özellikle kroma ve ton açısı hesaplamalarında trigonometrik tanımsızlıklar doğurur. " * 3
+    body_cie94 = "CIE94 formülü, 1994 yılında önerilen kroma ve ton ağırlıklandırma fonksiyonlarına sahip renk farkı metriğidir. " * 3
+
+    # 1. Distinct concepts in the same document must NEVER be merged
+    distinct_pairs = [
+        ("CIEDE2000 Renk Farkı Formülü", body_ciede, "CMC (l:c) Formülü", body_cmc, 0.75),
+        ("CIEDE2000 Renk Farkı Formülü", body_ciede, "Ayrım Boşluğu (Gap Effect / No-Separation) ve Hassasiyeti", body_gap, 0.72),
+        ("CIEDE2000 Renk Farkı Formülü", body_ciede, "Üç Boyutlu Objeler", body_3d, 0.60),
+        ("CIEDE2000 Renk Farkı Formülü", body_ciede, "Tekstil Endüstrisi ve Yüzey Pürüzlülüğü", body_textile, 0.58),
+        ("CIEDE2000 Renk Farkı Formülü", body_ciede, "Matematiksel Süreksizlikler", body_math, 0.65),
+        ("CIE94 Renk Farkı Metriği", body_cie94, "CIEDE2000 Renk Farkı Metriği", body_ciede, 0.92),  # Distinct digits (94 vs 2000)
+        ("Deney Protokolü 1", body_ciede, "Deney Protokolü 2", body_ciede, 0.95),  # Distinct index numbers
+    ]
+    for t1, c1, t2, c2, sim in distinct_pairs:
+        is_dup, _, _ = AiResponseParser.is_duplicate_concept(t1, t2, c1, c2, sim)
+        assert is_dup is False, f"False merge between distinct concepts: '{t1}' and '{t2}'"
+
+    # 2. True duplicate concepts must be recognized and merged
+    body_ciede_alt = "CIEDE2000 matematiksel renk farkı formülasyonu, görsel algıdaki elipsoit toleransları modellemek için geliştirilmiştir. " * 3
+    duplicate_pairs = [
+        # Exact canonical title match with different qualifier
+        ("Ayrım Boşluğu ve Hassasiyeti", "Ayrım Boşluğu (Gap Effect No-Separation) ve Hassasiyeti", body_gap, body_gap, 0.55),
+        # Paraphrased title with shared key entity and very high semantic similarity
+        ("CIEDE2000 Lightness Error", "CIEDE2000 Dark Patch Flaws", body_ciede, body_ciede_alt, 0.98),
+        # Substring / strong title similarity with high semantic similarity
+        ("Chromatic Adaptation Transform", "Chromatic Adaptation Mechanism", body_ciede, body_ciede_alt, 0.96),
+        ("Kromatik Uyum Mekanizması", "Kromatik Uyum Modeli", body_ciede, body_ciede_alt, 0.97),
+        # Core concept identity with word permutation and parenthetical qualifier
+        ("Swamy’nin Tesadüfi Katsayılar Modeli (RCM)", "Tesadüfi Katsayılar Modeli (Swamy’nin RCM)", body_ciede, body_ciede_alt, 0.36),
+        # Core concept identity with generic descriptive modifier (Ekonomik Büyüme vs Büyüme)
+        ("Adam Smith’in Büyüme Teorisi", "Adam Smith’in Ekonomik Büyüme Teorisi", body_ciede, body_ciede_alt, 0.22),
+    ]
+    for t1, t2, c1, c2, sim in duplicate_pairs:
+        is_dup, match_score, overlap = AiResponseParser.is_duplicate_concept(t1, t2, c1, c2, sim)
+        assert is_dup is True, f"Failed to merge true duplicate concept: '{t1}' and '{t2}'"
+        assert match_score > 0.50
+
+
+def test_parse_notes_json_with_list_ids_and_list_links():
+    # Simulates real-world Chunk 6 output where model returned list IDs and list targets
+    raw_payload = """{
+      "general_title": "Economics Thesis",
+      "notes": [
+        {
+          "id": 1,
+          "title": "Capital Accumulation",
+          "content": "Capital accumulation drives long-run growth.",
+          "connections": [2]
+        },
+        {
+          "id": [2],
+          "title": "Technological Convergence",
+          "content": "Technological convergence across developing economies.",
+          "connections": [1, [3]]
+        },
+        {
+          "id": 3,
+          "title": "Total Factor Productivity",
+          "content": "TFP represents efficiency beyond capital and labor inputs.",
+          "connections": []
+        }
+      ],
+      "links": [
+        {"source": 1, "target": [2, 3]},
+        {"source": [2, 3], "target": 1}
+      ]
+    }"""
+    notes = AiResponseParser.parse_notes_json(raw_payload)
+    assert len(notes) == 3
+    # Check that note 2 was unwrapped and assigned a valid ID
+    assert notes[1]["id"] == 2 or isinstance(notes[1]["id"], int)
+    assert notes[1]["title"] == "Technological Convergence"
+
+    # Note 1 should connect to Technological Convergence and Total Factor Productivity
+    conns_1 = notes[0]["connections"]
+    assert "Technological Convergence" in conns_1
+    assert "Total Factor Productivity" in conns_1
+
+    # Note 2 should connect to Capital Accumulation and Total Factor Productivity
+    conns_2 = notes[1]["connections"]
+    assert "Capital Accumulation" in conns_2
+    assert "Total Factor Productivity" in conns_2
+
+
+def test_parse_links_json_with_unrolled_lists():
+    raw_links_str = """{
+      "links": [
+        {"source": 1, "target": [2, 3]},
+        {"source": [4, 5], "target": [6, 7]}
+      ]
+    }"""
+    pairs = AiResponseParser.parse_links_json(raw_links_str)
+    # Expected unrolled pairs: (1, 2), (1, 3), (4, 6), (4, 7), (5, 6), (5, 7)
+    assert (1, 2) in pairs
+    assert (1, 3) in pairs
+    assert (4, 6) in pairs
+    assert (4, 7) in pairs
+    assert (5, 6) in pairs
+    assert (5, 7) in pairs
+    assert len(pairs) == 6
+
+
+def test_attach_links_to_notes_with_list_endpoints_and_ids():
+    notes = [
+        {"id": [1], "title": "Alpha Concept", "content": "Alpha content", "connections": []},
+        {"id": [2], "title": "Beta Concept", "content": "Beta content", "connections": []},
+        {"id": 3, "title": "Gamma Concept", "content": "Gamma content", "connections": []},
+    ]
+    # Link pairs with list values
+    pairs = [
+        ([1], [2, 3]),
+        (2, 3),
+    ]
+    attached = AiResponseParser.attach_links_to_notes(notes, pairs)
+    assert len(attached) == 3
+
+    # Alpha should be linked to Beta and Gamma
+    assert "Beta Concept" in attached[0]["connections"]
+    assert "Gamma Concept" in attached[0]["connections"]
+    # Beta should be linked to Alpha and Gamma
+    assert "Alpha Concept" in attached[1]["connections"]
+    assert "Gamma Concept" in attached[1]["connections"]
+    # Gamma should be linked to Alpha and Beta
+    assert "Alpha Concept" in attached[2]["connections"]
+    assert "Beta Concept" in attached[2]["connections"]
 
 
 

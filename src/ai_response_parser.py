@@ -6,6 +6,7 @@
 
 import re
 import json
+import difflib
 from typing import List, Dict, Any, Optional, Tuple
 from logger import log_debug, log_error
 
@@ -20,16 +21,16 @@ class AiResponseParser:
     FORBIDDEN_PATTERNS = [
         # Numeric & author-year citation brackets: [1], [38], [1, 2], [Smith et al., 2021]
         r"^\[\s*[\w\s\.,&]+(?:\s*,\s*\d{4})?\s*\]$",
-        # Academic & Scientific structural markers
-        r"^(?:figure|fig\.|table|tab\.|equation|eq\.|proposition|theorem|lemma|corollary|definition|appendix|footnote)\b",
+        # Academic & Scientific structural markers across English, German, French, Spanish
+        r"^(?:figure|fig\.|table|tab\.|equation|eq\.|proposition|theorem|lemma|corollary|definition|appendix|footnote|abbildung|abb\.|tabelle|gleichung|gl\.|tableau|équation|théorème|lemme|annexe|tabla|ecuación|teorema)\b",
         # Turkish academic / scientific markers
         r"^(?:şekil|sekil|tablo|denklem|önerme|onerme|teorem|aksiyom|tanım|tanim|dipnot|ek)\b",
-        # Legal / Regulatory markers
-        r"^(?:madde|fıkra|fikra|bent|paragraf|hüküm|hukum|article|clause|section|sec\.|paragraph|para\.|item)\b",
-        # Book / Literature / Report structural markers
-        r"^(?:chapter|ch\.|bölüm|bolum|kısım|kisim|part|page|p\.|sayfa|s\.)\b",
+        # Legal / Regulatory markers across languages
+        r"^(?:madde|fıkra|fikra|bent|paragraf|hüküm|hukum|article|art\.|clause|section|sec\.|paragraph|para\.|item|absatz|abs\.|artículo|sección|párrafo)\b",
+        # Book / Literature / Report structural markers across languages
+        r"^(?:chapter|ch\.|bölüm|bolum|kısım|kisim|part|page|p\.|sayfa|s\.|kapitel|seite|chapitre|partie|capítulo|página)\b",
         # Transcript / Meeting markers & timestamps
-        r"^(?:speaker|konuşmacı|konusmaci)\b",
+        r"^(?:speaker|konuşmacı|konusmaci|sprecher|orador|locuteur|intervenant)\b",
         r"^\d{1,2}:\d{2}(?::\d{2})?$",
     ]
     _COMPILED_FORBIDDEN = [re.compile(p, re.IGNORECASE) for p in FORBIDDEN_PATTERNS]
@@ -37,8 +38,8 @@ class AiResponseParser:
     @staticmethod
     def strip_qualifiers(title: str) -> str:
         """Strips parenthetical qualifiers, brackets, leading articles, and currency signs for canonical title comparison."""
-        cleaned = re.sub(r"^(?:the|a|an)\s+", "", title.strip(), flags=re.IGNORECASE)
-        return re.sub(r"\s*[\(\[].*?[\)\]]", "", cleaned).replace("$", "").strip().casefold()
+        cleaned = re.sub(r"^(?:the|a|an|der|die|das|ein|eine|le|la|les|un|une|el|los|las|il|lo|gli|um|uma)\s+", "", title.strip(), flags=re.IGNORECASE)
+        return re.sub(r"\s*[\(\[（【].*?[\)\]）】]", "", cleaned).replace("$", "").strip().casefold()
 
     @staticmethod
     def normalize_tokens(text: str) -> List[str]:
@@ -55,6 +56,131 @@ class AiResponseParser:
                 stemmed.append(w)
         return stemmed
 
+    @staticmethod
+    def char_ngram_overlap(text1: str, text2: str, n: int = 4) -> float:
+        """
+        Computes language-agnostic character n-gram containment overlap.
+        Immune to agglutinative suffix differences (Turkish -ler/-in/-e),
+        compound words (German), verb conjugations, and CJK tokenization quirks.
+        Returns the containment ratio of the smaller text within the larger text.
+        """
+        if not text1 or not text2:
+            return 0.0
+        t1 = re.sub(r'\s+', ' ', text1.casefold()).strip()
+        t2 = re.sub(r'\s+', ' ', text2.casefold()).strip()
+        if len(t1) < n or len(t2) < n:
+            return 0.0
+        ngrams1 = {t1[i:i+n] for i in range(len(t1) - n + 1)}
+        ngrams2 = {t2[i:i+n] for i in range(len(t2) - n + 1)}
+        intersection = len(ngrams1 & ngrams2)
+        return intersection / max(1, min(len(ngrams1), len(ngrams2)))
+
+    # Multilingual generic domain qualifiers that must not trigger false title entity matching on their own
+    GENERIC_TITLE_WORDS = {
+        "formula", "formülü", "formulu", "formule", "formel", "fórmula",
+        "model", "modeli", "modèle", "modelo",
+        "theory", "teorisi", "théorie", "teoría",
+        "method", "yöntemi", "yontemi", "yöntem", "yontem", "méthode", "metodo", "methode",
+        "approach", "yaklaşımı", "yaklasimi", "approche", "enfoque", "ansatz",
+        "analysis", "analizi", "analyse", "análisis",
+        "concept", "kavramı", "kavrami", "konzept", "concepto",
+        "effect", "etkisi", "effet", "efecto", "wirkung",
+        "system", "sistemi", "système", "sistema",
+        "structure", "yapısı", "yapisi", "struktur", "estructura",
+        "overview", "genel", "bakış", "bakis", "aperçu", "resumen", "überblick",
+        # Generic descriptive modifiers across domains and languages
+        "economic", "ekonomik", "economique", "ökonomisch", "económico",
+        "basic", "temel", "fundamental", "fondamental",
+        "dynamic", "dynamics", "dinamik", "dinamikleri", "dinamiği",
+        "component", "components", "bileşen", "bileşenleri", "unsur", "unsurları",
+        "ve", "and", "et", "und", "y", "e",
+        "nin", "nın", "nun", "nün", "in", "ın", "un", "ün"
+    }
+
+    @classmethod
+    def is_duplicate_concept(
+        cls,
+        t1: str,
+        t2: str,
+        c1: str,
+        c2: str,
+        sim: float
+    ) -> Tuple[bool, float, float]:
+        """
+        Determines if two notes represent the same underlying concept using a domain-agnostic,
+        multilingual, multi-tiered verification combining canonical title identity, title similarity,
+        lexical overlap, distinctive entity matching, and embedding cosine similarity.
+
+        Returns:
+            (is_dup, match_score, content_overlap) where match_score is a composite ranking score
+            for best-match selection.
+        """
+        c1_str = str(c1).strip()
+        c2_str = str(c2).strip()
+
+        # 1. Never merge if content is too short (< 80 chars) to prevent false test/stub merges
+        if len(c1_str) < 80 or len(c2_str) < 80:
+            return False, 0.0, 0.0
+
+        t1_clean = cls.strip_qualifiers(t1)
+        t2_clean = cls.strip_qualifiers(t2)
+
+        # 2. Never merge if canonical titles contain distinct numbers/indices (e.g. 'CIE94' vs 'CIEDE2000', 'Part 1' vs 'Part 2')
+        digits1 = set(re.findall(r'\d+', t1_clean))
+        digits2 = set(re.findall(r'\d+', t2_clean))
+        if digits1 and digits2 and digits1 != digits2:
+            return False, 0.0, 0.0
+
+        t_sim = difflib.SequenceMatcher(None, t1_clean, t2_clean).ratio()
+
+        # Language-agnostic char 4-gram overlap + fallback token overlap
+        char_overlap = cls.char_ngram_overlap(c1_str, c2_str, n=4)
+        words1 = set(cls.normalize_tokens(c1_str))
+        words2 = set(cls.normalize_tokens(c2_str))
+        tok_overlap = len(words1 & words2) / max(1, min(len(words1), len(words2)))
+        content_overlap = max(char_overlap, tok_overlap)
+
+        min_len = min(len(t1_clean), len(t2_clean))
+        max_len = max(len(t1_clean), len(t2_clean))
+        is_title_substr = (
+            (t1_clean in t2_clean or t2_clean in t1_clean)
+            if (min_len >= 6 and max_len > 0 and (min_len / max_len >= 0.35))
+            else False
+        )
+
+        t_toks1 = {w for w in re.findall(r'\b\w+\b', t1_clean) if len(w) >= 3 and w not in cls.GENERIC_TITLE_WORDS}
+        t_toks2 = {w for w in re.findall(r'\b\w+\b', t2_clean) if len(w) >= 3 and w not in cls.GENERIC_TITLE_WORDS}
+        shared_distinctive = bool(t_toks1 & t_toks2)
+
+        # Core non-generic token sets across the complete title string (capturing permutations and author references)
+        raw_toks1 = set(cls.normalize_tokens(t1))
+        raw_toks2 = set(cls.normalize_tokens(t2))
+        core_toks1 = {w for w in raw_toks1 if len(w) >= 3 and w not in cls.GENERIC_TITLE_WORDS}
+        core_toks2 = {w for w in raw_toks2 if len(w) >= 3 and w not in cls.GENERIC_TITLE_WORDS}
+        core_identity = (core_toks1 == core_toks2 and len(core_toks1) >= 2)
+
+        is_dup = (
+            # Tier 1: Exact canonical title match (after stripping qualifiers/articles) with modest corroboration
+            (t1_clean == t2_clean and (sim >= 0.75 or content_overlap >= 0.20)) or
+            # Tier 1b: Core concept identity (same distinctive entities/words across permutations/modifiers) with corroboration
+            (core_identity and (content_overlap >= 0.20 or sim >= 0.50)) or
+            # Tier 2: Substring or strong title similarity with high semantic similarity
+            ((is_title_substr or t_sim >= 0.65) and sim >= 0.88 and (content_overlap >= 0.25 or t_sim >= 0.75)) or
+            # Tier 3: Substantial title similarity with significant content overlap and solid semantic similarity
+            (t_sim >= 0.55 and content_overlap >= 0.40 and sim >= 0.80) or
+            # Tier 4: Near-identical text content (safety fallback for verbatim/near-verbatim re-extraction)
+            (content_overlap >= 0.75) or
+            # Tier 5: Shared distinctive title entity with extremely high semantic similarity
+            (shared_distinctive and sim >= 0.95 and (t_sim >= 0.40 or content_overlap >= 0.25))
+        )
+
+        # Composite match score: prioritize core concept identity or balanced title/embedding alignment
+        if core_identity and (content_overlap >= 0.20 or sim >= 0.50):
+            match_score = max(sim * 0.50 + t_sim * 0.30 + content_overlap * 0.20, 0.85 + content_overlap * 0.15)
+        else:
+            match_score = sim * 0.50 + t_sim * 0.30 + content_overlap * 0.20
+        return is_dup, match_score, content_overlap
+
 
     @classmethod
     def clean_connections(cls, raw_connections: Any, current_title: str = "") -> List[str]:
@@ -62,16 +188,27 @@ class AiResponseParser:
         Cleans and sanitizes note connections.
         Filters out citations, structural coordinates, self-references, and duplicates.
         """
-        if not raw_connections or not isinstance(raw_connections, list):
+        if not raw_connections:
             return []
+        if not isinstance(raw_connections, list):
+            raw_connections = [raw_connections]
+
+        flat_items: List[str] = []
+        def _collect(val: Any) -> None:
+            if isinstance(val, (list, tuple)):
+                for sub in val:
+                    _collect(sub)
+            elif isinstance(val, str):
+                flat_items.append(val)
+            elif val is not None and not isinstance(val, (dict, set)):
+                flat_items.append(str(val))
+        _collect(raw_connections)
 
         cleaned: List[str] = []
         seen = set()
         title_lower = current_title.strip().lower()
 
-        for item in raw_connections:
-            if not isinstance(item, str):
-                continue
+        for item in flat_items:
             item_raw = item.strip()
             if not item_raw:
                 continue
@@ -141,12 +278,20 @@ class AiResponseParser:
             id_to_note[num_id] = n
             id_to_note[str(num_id)] = n
 
-            # Map explicit non-numeric ID (e.g. UUID) without overriding sequential integer indices
+            # Map explicit ID without overriding sequential integer indices
             raw_id = n.get("id")
-            if raw_id is not None and not isinstance(raw_id, int):
+            if isinstance(raw_id, (list, tuple)):
+                raw_id = raw_id[0] if raw_id else None
+                n["id"] = raw_id
+            if raw_id is not None:
+                try:
+                    if raw_id not in id_to_note:
+                        id_to_note[raw_id] = n
+                except TypeError:
+                    pass
                 raw_str = str(raw_id).strip()
-                if not raw_str.isdigit():
-                    id_to_note[raw_id] = n
+                if raw_str not in id_to_note:
+                    id_to_note[raw_str] = n
 
         token_map: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         for t, n in note_by_title.items():
@@ -157,8 +302,19 @@ class AiResponseParser:
         def resolve_endpoint(val: Any) -> Optional[Dict[str, Any]]:
             if val is None:
                 return None
-            if val in id_to_note:
-                return id_to_note[val]
+            if isinstance(val, (list, tuple)):
+                if not val:
+                    return None
+                val = val[0]
+            if isinstance(val, dict):
+                val = val.get("title") or val.get("id") or val.get("target") or val.get("name")
+                if val is None:
+                    return None
+            try:
+                if val in id_to_note:
+                    return id_to_note[val]
+            except TypeError:
+                pass
             if isinstance(val, str):
                 val_clean = val.strip()
                 if val_clean.isdigit() and int(val_clean) in id_to_note:
@@ -174,7 +330,16 @@ class AiResponseParser:
                     return token_map[val_toks]
             return None
 
+        unrolled_pairs: List[Tuple[Any, Any]] = []
         for src_val, tgt_val in pairs:
+            src_list = src_val if isinstance(src_val, (list, tuple)) else [src_val]
+            tgt_list = tgt_val if isinstance(tgt_val, (list, tuple)) else [tgt_val]
+            for s in src_list:
+                for t in tgt_list:
+                    if s is not None and t is not None:
+                        unrolled_pairs.append((s, t))
+
+        for src_val, tgt_val in unrolled_pairs:
             src_note = resolve_endpoint(src_val)
             tgt_note = resolve_endpoint(tgt_val)
 
@@ -264,13 +429,21 @@ class AiResponseParser:
             id_to_note[idx + 1] = it
             id_to_note[str(idx + 1)] = it
 
-            # Explicit ID mapping if provided by model (non-numeric only to avoid clobbering)
+            # Explicit ID mapping if provided by model
             if "id" in it:
                 raw_id = it["id"]
-                if not isinstance(raw_id, int):
+                if isinstance(raw_id, (list, tuple)):
+                    raw_id = raw_id[0] if raw_id else None
+                    it["id"] = raw_id
+                if raw_id is not None:
+                    try:
+                        if raw_id not in id_to_note:
+                            id_to_note[raw_id] = it
+                    except TypeError:
+                        pass
                     raw_str = str(raw_id).strip()
-                    if not raw_str.isdigit():
-                        id_to_note[raw_id] = it
+                    if raw_str not in id_to_note:
+                        id_to_note[raw_str] = it
 
             if canon_title:
                 clean_title_map[canon_title.casefold()] = canon_title
@@ -283,8 +456,25 @@ class AiResponseParser:
             raw_c = it.get("connections", [])
             if not isinstance(raw_c, list):
                 raw_c = [raw_c] if raw_c else []
+            flat_c: List[Any] = []
+            def _flatten_c(val: Any) -> None:
+                if isinstance(val, (list, tuple)):
+                    for sub in val:
+                        _flatten_c(sub)
+                elif val is not None:
+                    flat_c.append(val)
+            _flatten_c(raw_c)
+
             resolved_c: List[str] = []
-            for c in raw_c:
+            for c in flat_c:
+                if isinstance(c, dict):
+                    c = c.get("title") or c.get("id") or c.get("target") or c.get("name")
+                    if c is None:
+                        continue
+                if isinstance(c, (list, tuple)):
+                    c = c[0] if c else None
+                    if c is None:
+                        continue
                 if isinstance(c, int) and c in id_to_note:
                     target_title = id_to_note[c]["title"]
                     if target_title and target_title.lower() != it["title"].lower():
@@ -304,58 +494,80 @@ class AiResponseParser:
                             resolved_c.append(clean_title_map[c_norm])
                         else:
                             resolved_c.append(c_strip)
+                else:
+                    try:
+                        if c in id_to_note:
+                            target_title = id_to_note[c]["title"]
+                            if target_title and target_title.lower() != it["title"].lower():
+                                resolved_c.append(target_title)
+                    except TypeError:
+                        pass
             it["connections"] = cls.clean_connections(resolved_c, it["title"])
 
         # 3. Resolve top-level links if present
         if raw_links:
+            link_pairs: List[Tuple[Any, Any]] = []
             for link in raw_links:
                 src_val, tgt_val = None, None
                 if isinstance(link, dict):
-                    src_val = link.get("source") or link.get("from") or link.get("source_title") or link.get("note_a") or link.get("source_id")
-                    tgt_val = link.get("target") or link.get("to") or link.get("target_title") or link.get("note_b") or link.get("target_id")
+                    src_val = (
+                        link.get("source") or link.get("from") or link.get("source_title")
+                        or link.get("note_a") or link.get("source_id") or link.get("src")
+                    )
+                    tgt_val = (
+                        link.get("target") or link.get("to") or link.get("target_title")
+                        or link.get("note_b") or link.get("target_id") or link.get("dst")
+                    )
                 elif isinstance(link, (list, tuple)) and len(link) >= 2:
                     src_val, tgt_val = link[0], link[1]
 
                 if src_val is not None and tgt_val is not None:
-                    src_note = None
-                    tgt_note = None
+                    src_list = src_val if isinstance(src_val, (list, tuple)) else [src_val]
+                    tgt_list = tgt_val if isinstance(tgt_val, (list, tuple)) else [tgt_val]
+                    for s in src_list:
+                        for t in tgt_list:
+                            if s is not None and t is not None:
+                                link_pairs.append((s, t))
 
-                    # Resolve src
-                    if src_val in id_to_note:
-                        src_note = id_to_note[src_val]
-                    elif isinstance(src_val, str) and src_val.strip().isdigit() and int(src_val.strip()) in id_to_note:
-                        src_note = id_to_note[int(src_val.strip())]
-                    elif isinstance(src_val, str):
-                        s_clean = src_val.strip()
-                        s_canon = clean_title_map.get(s_clean.casefold()) or clean_title_map.get(cls.strip_qualifiers(s_clean))
-                        if s_canon:
-                            for cand in items:
-                                if cand["title"] == s_canon:
-                                    src_note = cand
-                                    break
+            def resolve_single_endpoint(val: Any) -> Optional[Dict[str, Any]]:
+                if val is None:
+                    return None
+                if isinstance(val, (list, tuple)):
+                    if not val:
+                        return None
+                    val = val[0]
+                if isinstance(val, dict):
+                    val = val.get("title") or val.get("id") or val.get("target") or val.get("name")
+                    if val is None:
+                        return None
+                try:
+                    if val in id_to_note:
+                        return id_to_note[val]
+                except TypeError:
+                    pass
+                if isinstance(val, str):
+                    val_strip = val.strip()
+                    if val_strip.isdigit() and int(val_strip) in id_to_note:
+                        return id_to_note[int(val_strip)]
+                    s_canon = clean_title_map.get(val_strip.casefold()) or clean_title_map.get(cls.strip_qualifiers(val_strip))
+                    if s_canon:
+                        for cand in items:
+                            if cand["title"] == s_canon:
+                                return cand
+                return None
 
-                    # Resolve tgt
-                    if tgt_val in id_to_note:
-                        tgt_note = id_to_note[tgt_val]
-                    elif isinstance(tgt_val, str) and tgt_val.strip().isdigit() and int(tgt_val.strip()) in id_to_note:
-                        tgt_note = id_to_note[int(tgt_val.strip())]
-                    elif isinstance(tgt_val, str):
-                        t_clean = tgt_val.strip()
-                        t_canon = clean_title_map.get(t_clean.casefold()) or clean_title_map.get(cls.strip_qualifiers(t_clean))
-                        if t_canon:
-                            for cand in items:
-                                if cand["title"] == t_canon:
-                                    tgt_note = cand
-                                    break
+            for s, t in link_pairs:
+                src_note = resolve_single_endpoint(s)
+                tgt_note = resolve_single_endpoint(t)
 
-                    if src_note and tgt_note and src_note is not tgt_note:
-                        s_title = src_note["title"]
-                        t_title = tgt_note["title"]
-                        if s_title.lower() != t_title.lower():
-                            if t_title not in src_note["connections"]:
-                                src_note["connections"].append(t_title)
-                            if s_title not in tgt_note["connections"]:
-                                tgt_note["connections"].append(s_title)
+                if src_note and tgt_note and src_note is not tgt_note:
+                    s_title = src_note["title"]
+                    t_title = tgt_note["title"]
+                    if s_title.lower() != t_title.lower():
+                        if t_title not in src_note["connections"]:
+                            src_note["connections"].append(t_title)
+                        if s_title not in tgt_note["connections"]:
+                            tgt_note["connections"].append(s_title)
 
         # Final sanitize of connections on all items
         for it in items:
@@ -492,6 +704,45 @@ class AiResponseParser:
             s += stack.pop()
 
         return s
+
+    @classmethod
+    def is_valid_empty_notes_response(cls, response_text: str) -> bool:
+        """
+        Determines whether the model response represents a syntactically valid JSON payload
+        that intentionally returned an empty notes array (e.g. 'notes': []).
+        Used by LLM clients to distinguish an intended empty extraction from a parsing failure.
+        """
+        if not response_text or not isinstance(response_text, str):
+            return False
+
+        cleaned_str = re.sub(r'^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$', '', response_text)
+        outer_think_match = re.match(
+            r'^\s*(?:<think>|<\|think\|>)[\s\S]*?(?:</think>|<think\|>|<\|channel\|>)\s*',
+            cleaned_str,
+            re.IGNORECASE
+        )
+        if outer_think_match:
+            cleaned_str = cleaned_str[outer_think_match.end():].strip()
+
+        cleaned_str = cls.sanitize_latex_escapes(cleaned_str)
+
+        code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_str)
+        candidates = code_blocks if code_blocks else [cleaned_str]
+
+        for cand in candidates:
+            cand_clean = cand.strip()
+            try:
+                parsed = json.loads(cand_clean, strict=False)
+                if isinstance(parsed, dict):
+                    for key in ('notes', 'zettelkasten', 'items', 'generated_notes'):
+                        if key in parsed and isinstance(parsed[key], list) and len(parsed[key]) == 0:
+                            return True
+                elif isinstance(parsed, list) and len(parsed) == 0:
+                    return True
+            except Exception:
+                pass
+
+        return False
 
     @classmethod
     def parse_notes_json(cls, response_text: str) -> List[Dict[str, Any]]:
@@ -713,12 +964,29 @@ class AiResponseParser:
 
             for item in items:
                 if isinstance(item, dict):
-                    src = item.get("source") or item.get("from") or item.get("source_title") or item.get("note_a") or item.get("source_id")
-                    tgt = item.get("target") or item.get("to") or item.get("target_title") or item.get("note_b") or item.get("target_id")
+                    src = (
+                        item.get("source") or item.get("from") or item.get("source_title")
+                        or item.get("note_a") or item.get("source_id") or item.get("src")
+                    )
+                    tgt = (
+                        item.get("target") or item.get("to") or item.get("target_title")
+                        or item.get("note_b") or item.get("target_id") or item.get("dst")
+                    )
                     if src is not None and tgt is not None:
-                        pairs.append((src, tgt))
+                        src_list = src if isinstance(src, (list, tuple)) else [src]
+                        tgt_list = tgt if isinstance(tgt, (list, tuple)) else [tgt]
+                        for s in src_list:
+                            for t in tgt_list:
+                                if s is not None and t is not None:
+                                    pairs.append((s, t))
                 elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    pairs.append((item[0], item[1]))
+                    src, tgt = item[0], item[1]
+                    src_list = src if isinstance(src, (list, tuple)) else [src]
+                    tgt_list = tgt if isinstance(tgt, (list, tuple)) else [tgt]
+                    for s in src_list:
+                        for t in tgt_list:
+                            if s is not None and t is not None:
+                                pairs.append((s, t))
             return pairs
 
         # 1. Direct JSON parse
@@ -845,4 +1113,174 @@ class AiResponseParser:
             return unique_pairs
 
         return []
+
+    @staticmethod
+    def extract_body_paragraphs(content: str) -> List[str]:
+        """Extracts structural markdown body paragraphs, excluding the title and metadata/references."""
+        lines = content.strip().split("\n")
+        body_lines = []
+        in_related = False
+        for l in lines:
+            if re.match(r"^##\s*(?:Related Notes|İlgili Notlar|Referanslar|References|Kaynaklar)\b", l.strip(), re.IGNORECASE):
+                in_related = True
+                continue
+            if in_related:
+                continue
+            if l.strip().startswith("# ") and not body_lines:
+                continue  # skip main title
+            body_lines.append(l)
+
+        body_text = "\n".join(body_lines).strip()
+        raw_paras = [p.strip() for p in re.split(r"\n\s*\n", body_text) if p.strip()]
+        return raw_paras
+
+    @classmethod
+    def synthesize_note_contents(cls, base_content: str, incoming_content: str) -> str:
+        """
+        Synthesizes two notes on the same concept without information loss.
+        Compares body paragraphs, detects novel insights or complementary explanations
+        present in incoming_content but absent in base_content, and non-redundantly integrates them.
+        """
+        import difflib
+
+        if not incoming_content or not incoming_content.strip():
+            return base_content
+        if not base_content or not base_content.strip():
+            return incoming_content
+
+        # Determine which content serves best as the structural base (prefer the more comprehensive exposition)
+        if len(incoming_content.strip()) > len(base_content.strip()) + 150:
+            primary_text = incoming_content
+            secondary_text = base_content
+        else:
+            primary_text = base_content
+            secondary_text = incoming_content
+
+        primary_paras = cls.extract_body_paragraphs(primary_text)
+        secondary_paras = cls.extract_body_paragraphs(secondary_text)
+
+        novel_paras = []
+        for sec_p in secondary_paras:
+            # Skip short headings or one-liners
+            if len(sec_p) < 40 or sec_p.startswith("#"):
+                continue
+
+            # Compare against all primary paragraphs
+            is_covered = False
+            for pri_p in primary_paras:
+                ratio = difflib.SequenceMatcher(None, sec_p.lower(), pri_p.lower()).ratio()
+                if ratio >= 0.50:
+                    is_covered = True
+                    break
+            if not is_covered:
+                novel_paras.append(sec_p)
+
+        if not novel_paras:
+            return primary_text
+
+        # Detect language of base note for appropriate section heading
+        text_lower = primary_text.lower()
+        if any(c in "çğıöşü" for c in text_lower):
+            subhead = "### Ek Gözlemler ve Tamamlayıcı Detaylar"
+        elif any(c in "äöüß" for c in text_lower):
+            subhead = "### Zusätzliche Beobachtungen und Details"
+        elif any(c in "éèêàùôîï" for c in text_lower):
+            subhead = "### Observations et détails complémentaires"
+        elif any(c in "ñáíú" for c in text_lower):
+            subhead = "### Observaciones y detalles adicionales"
+        else:
+            subhead = "### Additional Observations and Details"
+
+        novel_section = f"\n\n{subhead}\n" + "\n\n".join(novel_paras)
+
+        # Insert before references or at the end
+        rel_match = re.search(r"(##\s+(?:Related Notes|İlgili Notlar|Referanslar|References|Kaynaklar|Verwandte Notizen|Notes connexes|Notas relacionadas)\b)", primary_text, re.IGNORECASE)
+        if rel_match:
+            idx = rel_match.start()
+            return primary_text[:idx].rstrip() + novel_section + "\n\n" + primary_text[idx:].lstrip()
+        else:
+            return primary_text.rstrip() + novel_section
+
+    @classmethod
+    def parse_synthesized_note(cls, response_text: str) -> Optional[Dict[str, Any]]:
+        """
+        Parses the JSON or Markdown output of an N-way note synthesis LLM call.
+        Returns a dict with 'title', 'content', and 'connections', or None if invalid.
+        """
+        if not response_text or not response_text.strip():
+            return None
+
+        cleaned_str = re.sub(r'^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$', '', response_text)
+        outer_think_match = re.match(
+            r'^\s*(?:<think>|<\|think\|>)[\s\S]*?(?:</think>|<think\|>|<\|channel\|>)\s*',
+            cleaned_str,
+            re.IGNORECASE
+        )
+        if outer_think_match:
+            cleaned_str = cleaned_str[outer_think_match.end():].strip()
+
+        cleaned_str = cls.sanitize_latex_escapes(cleaned_str)
+        code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_str)
+        cleaned = code_blocks[0] if code_blocks else cleaned_str
+        data = None
+
+        # 1. Try standard JSON extraction
+        try:
+            data = json.loads(cleaned)
+        except Exception:
+            # Try finding outermost JSON object { ... }
+            match = re.search(r"\{[\s\S]*\}", cleaned)
+            if match:
+                try:
+                    data = json.loads(match.group(0))
+                except Exception:
+                    pass
+
+        if isinstance(data, dict):
+            title = str(data.get("title", "")).strip()
+            content = str(data.get("content", "")).strip()
+            # If title is in markdown header within content (# Title), strip it from content
+            if title and content.startswith(f"# {title}"):
+                content = content[len(f"# {title}"):].strip()
+            elif content.startswith("# "):
+                first_line, _, rest = content.partition("\n")
+                if not title:
+                    title = first_line.lstrip("# ").strip()
+                content = rest.strip()
+
+            raw_conns = data.get("connections", [])
+            cleaned_conns = cls.clean_connections(raw_conns, current_title=title)
+
+            if title and content:
+                return {
+                    "title": title,
+                    "content": content,
+                    "connections": cleaned_conns
+                }
+
+        # 2. Markdown fallback if model answered in raw Markdown
+        lines = [l.strip() for l in cleaned.split("\n") if l.strip()]
+        if lines:
+            first_line = lines[0]
+            title = ""
+            if first_line.startswith("# "):
+                title = first_line.lstrip("# ").strip()
+                body = "\n".join(lines[1:]).strip()
+            else:
+                body = cleaned.strip()
+
+            # Extract any wikilinks [[Target]]
+            wikilinks = re.findall(r"\[\[(.*?)\]\]", body)
+            cleaned_conns = cls.clean_connections(wikilinks, current_title=title)
+
+            if body:
+                return {
+                    "title": title or "Synthesized Concept",
+                    "content": body,
+                    "connections": cleaned_conns
+                }
+
+        return None
+
+
 

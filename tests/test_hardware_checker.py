@@ -141,25 +141,23 @@ def test_device_performance_profile_detection():
 
 
 def test_calculate_adaptive_context_window():
-    # 1. Short document: only 200 words (~50 tokens). Should allocate minimum floor of 8192
+    # 1. Short document: fixed to 16K
     short_text = "Short note text about an idea. " * 50
     ctx_short = HardwareChecker.calculate_adaptive_context_window(short_text)
-    assert ctx_short == 8192
+    assert ctx_short == 16384
 
-    # 2. Medium/Long document on Standard profile: ~30,000 tokens demand
+    # 2. Medium/Long document on Standard profile: fixed to 16K
     long_text = "Dense academic analysis of neural networks and latent representations. " * 1500
     with patch.object(HardwareChecker, "get_device_performance_profile", return_value="STANDARD"):
         with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 16.0, "available_gb": 10.0}):
-            ctx_long = HardwareChecker.calculate_adaptive_context_window(long_text, model_max_ctx=131072)
-            assert ctx_long >= 32768
-            assert ctx_long <= 131072
-            # Must be multiple of 4096
+            ctx_long = HardwareChecker.calculate_adaptive_context_window(long_text, model_max_ctx=16384)
+            assert ctx_long == 16384
             assert ctx_long % 4096 == 0
 
-    # 3. Long document on Low-End profile: Should be capped at safe ceiling (16384 or 8192)
+    # 3. Long document on Low-End profile: fixed to 16K
     with patch.object(HardwareChecker, "get_device_performance_profile", return_value="LOW_END"):
         with patch.object(HardwareChecker, "get_system_memory_info", return_value={"total_gb": 8.0, "available_gb": 3.0}):
-            ctx_low_end = HardwareChecker.calculate_adaptive_context_window(long_text, model_max_ctx=131072)
+            ctx_low_end = HardwareChecker.calculate_adaptive_context_window(long_text, model_max_ctx=16384)
             assert ctx_low_end == 16384
 
 

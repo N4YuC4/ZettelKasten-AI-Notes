@@ -90,10 +90,24 @@ CURATED_MODELS: Dict[str, LocalModelInfo] = {
         model_type="embedding",
         dimensions=1024,
     ),
+    "qwen3-reranker-0.6b": LocalModelInfo(
+        id="qwen3-reranker-0.6b",
+        display_name="Qwen3 Reranker (0.6B)",
+        user_description="Cross-Encoder Reranker — High precision document scoring and duplicate elimination",
+        tier_label="Reranker",
+        repo_id="mradermacher/Qwen3-Reranker-0.6B-GGUF",
+        filename="Qwen3-Reranker-0.6B.Q4_K_M.gguf",
+        size_bytes=396_000_000,
+        min_ram_gb=2.0,
+        recommended_ram_gb=4.0,
+        context_window=32768,
+        model_type="reranker",
+    ),
 }
 
 DEFAULT_MODEL_ID = "gemma-4-e2b"
 DEFAULT_EMBEDDING_MODEL_ID = "harrier-oss-v1-0.6b"
+DEFAULT_RERANKER_MODEL_ID = "qwen3-reranker-0.6b"
 
 
 def get_curated_models(model_type: Optional[str] = "generation") -> List[LocalModelInfo]:
@@ -106,6 +120,11 @@ def get_curated_models(model_type: Optional[str] = "generation") -> List[LocalMo
 def get_embedding_models() -> List[LocalModelInfo]:
     """Returns all curated embedding models."""
     return [m for m in CURATED_MODELS.values() if m.model_type == "embedding"]
+
+
+def get_reranker_models() -> List[LocalModelInfo]:
+    """Returns all curated reranker models."""
+    return [m for m in CURATED_MODELS.values() if m.model_type == "reranker"]
 
 
 def get_generation_models() -> List[LocalModelInfo]:

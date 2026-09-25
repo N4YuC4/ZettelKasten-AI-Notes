@@ -7,17 +7,19 @@ import re
 import math
 from typing import List, Optional, Callable
 
-DEFAULT_EXTRACTION_CHUNK_TOKENS = 4500
-DEFAULT_OVERLAP_TOKENS = 100
+DEFAULT_EXTRACTION_CHUNK_TOKENS = 6000
+DEFAULT_OVERLAP_TOKENS = 0
 
 
 def estimate_tokens(text: str) -> int:
     """
-    Conservative token estimation for Latin, Turkish, and multilingual prose (~3.2 chars/token).
+    Conservative token estimation for multilingual prose and CJK ideographs.
     """
     if not text:
         return 0
-    return max(1, int(len(text) / 3.2))
+    cjk_count = len(re.findall(r'[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]', text))
+    other_chars = len(text) - cjk_count
+    return max(1, int(cjk_count * 1.5 + other_chars / 3.2))
 
 
 def chunk_text(
@@ -55,26 +57,49 @@ def chunk_text(
     for p in raw_paras:
         p_tok = token_counter(p)
         if p_tok > target_new_tokens:
-            # Sub-split oversized paragraphs or unstructured text blobs by sentence endings
-            sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', p) if s.strip()]
+            # Sub-split oversized paragraphs or unstructured text blobs by universal sentence endings (.!? and CJK/Arabic/Indic full stops)
+            sentences = [s.strip() for s in re.split(r'(?<=[.!?。！？\u061F\u0964])\s+', p) if s.strip()]
             for s in sentences:
                 s_tok = token_counter(s)
                 if s_tok > target_new_tokens:
-                    # Fallback for text with no punctuation: split by words
-                    words = s.split()
-                    cur_w: List[str] = []
-                    cur_w_tok = 0
-                    for w in words:
-                        wt = token_counter(w + " ")
-                        if cur_w_tok + wt > target_new_tokens and cur_w:
+                    # Check if block contains multiple lines (e.g. table rows or list items)
+                    lines = [l.strip() for l in s.split("\n") if l.strip()]
+                    if len(lines) > 1:
+                        for line in lines:
+                            l_tok = token_counter(line)
+                            if l_tok > target_new_tokens:
+                                words = line.split()
+                                cur_w: List[str] = []
+                                cur_w_tok = 0
+                                for w in words:
+                                    wt = token_counter(w + " ")
+                                    if cur_w_tok + wt > target_new_tokens and cur_w:
+                                        units.append(" ".join(cur_w))
+                                        cur_w = [w]
+                                        cur_w_tok = wt
+                                    else:
+                                        cur_w.append(w)
+                                        cur_w_tok += wt
+                                if cur_w:
+                                    units.append(" ".join(cur_w))
+                            else:
+                                units.append(line)
+                    else:
+                        # Fallback for single massive sentence/line with no punctuation: split by words
+                        words = s.split()
+                        cur_w: List[str] = []
+                        cur_w_tok = 0
+                        for w in words:
+                            wt = token_counter(w + " ")
+                            if cur_w_tok + wt > target_new_tokens and cur_w:
+                                units.append(" ".join(cur_w))
+                                cur_w = [w]
+                                cur_w_tok = wt
+                            else:
+                                cur_w.append(w)
+                                cur_w_tok += wt
+                        if cur_w:
                             units.append(" ".join(cur_w))
-                            cur_w = [w]
-                            cur_w_tok = wt
-                        else:
-                            cur_w.append(w)
-                            cur_w_tok += wt
-                    if cur_w:
-                        units.append(" ".join(cur_w))
                 else:
                     units.append(s)
         else:

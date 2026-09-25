@@ -8,13 +8,13 @@ import json
 
 
 SYSTEM_INSTRUCTION_EXTRACTION = (
-    "You are an expert knowledge architect and research scholar specialized in Niklas Luhmann's Zettelkasten method. "
+    "You are an expert knowledge architect, research scholar, and deterministic knowledge compiler specialized in Niklas Luhmann's Zettelkasten method. "
     "Your objective is to extract key concepts, theories, mechanisms, and arguments from the given text into deeply elaborated, "
     "analytically thorough, yet strictly atomic and self-contained notes. "
     "Before extracting notes, perform contrastive deliberation inside 'conceptual_analysis': articulate the core thesis, "
     "audit prospective candidate concepts against existing titles to eliminate recurring section echoes, and verify distinctness. "
     "Atomicity means ONE distinct concept per note, NOT brevity. Do not write shallow summaries; explain the inner workings, "
-    "causal logic, nuances, and specific details of each idea in full depth. "
+    "causal logic, nuances, specific parameters, and empirical findings in full depth. "
     "When explaining scientific, mathematical, or technical concepts, use rigorous LaTeX notation, clean structured bullet points, "
     "and display math blocks ($$ ... $$) for standalone equations to ensure high legibility and typographical elegance. "
     "After all notes are fully written, record natural structural dependencies (Folgezettel) in a top-level 'links' array using integer note IDs (id), while keeping standalone definitions unlinked. "
@@ -33,14 +33,71 @@ SYSTEM_INSTRUCTION_LINKING = (
     "Do NOT make forced or superficial connections. Return a valid JSON object with a 'links' array containing 'relationship_logic', 'source', and 'target'."
 )
 
+SYSTEM_INSTRUCTION_SYNTHESIS = (
+    "You are an expert knowledge synthesizer and Zettelkasten architect. "
+    "Your task is to consolidate multiple overlapping or duplicate notes describing the same core concept "
+    "across different sections of a document into a SINGLE, unified, comprehensive, and atomic Zettelkasten note. "
+    "STRICT LANGUAGE INVARIANCE: Every note title, section header, and explanatory prose MUST be written strictly "
+    "in the primary narrative language of the source notes. Never translate titles or content into English. "
+    "Do NOT simply summarize or shorten the notes. Preserve all distinct technical parameters, mathematical formulas, "
+    "empirical findings, examples, and causal explanations from all input variants. "
+    "Eliminate verbatim repetitions and harmonize the prose into a seamless, organic, and authoritative Markdown document. "
+    "Output must be a valid JSON object matching the schema: "
+    '{"title": "<Canonical Title in source language>", "content": "<Markdown body in source language without title header>", "connections": ["Target Note 1", ...]}'
+)
+
+
+def build_note_synthesis_prompt(cluster_notes: List[Dict[str, Any]]) -> str:
+    """
+    Builds the user prompt for N-way multi-note synthesis across a cluster of duplicate notes.
+    """
+    variants_text = []
+    all_connections = set()
+    for idx, note in enumerate(cluster_notes):
+        title = note.get("title", f"Note {idx+1}")
+        content = note.get("content", "")
+        conns = note.get("connections", [])
+        if isinstance(conns, list):
+            for c in conns:
+                if isinstance(c, str) and c.strip():
+                    all_connections.add(c.strip())
+        variants_text.append(
+            f"--- VARIANT {idx+1} (Title: {title}) ---\n{content.strip()}"
+        )
+
+    joined_variants = "\n\n".join(variants_text)
+    conns_str = ", ".join(f'"{c}"' for c in sorted(all_connections)) if all_connections else "None"
+
+    return f"""The following {len(cluster_notes)} notes were extracted from different sections of the same document, describing the same core concept:
+
+{joined_variants}
+
+Existing Connections across all variants: [{conns_str}]
+
+TASK:
+Synthesize these {len(cluster_notes)} variants into a SINGLE, definitive, and deeply elaborated atomic Zettelkasten note.
+
+RULES:
+1. TITLE: Choose or formulate the most accurate, canonical, and concise concept title strictly in the EXACT SAME LANGUAGE as the source notes. NEVER translate a non-English title into English.
+2. SYNTHESIS: Seamlessly integrate all distinct arguments, technical nuances, experimental findings, and equations from every variant into a single, cohesive narrative.
+3. PRESERVATION: Never omit concrete parameters, figures, or specific domain examples. Do NOT create a shallow summary.
+4. ATOMICITY & DEDUPLICATION: Merge identical points into clear, well-structured paragraphs or bullet points without repetition.
+5. CONNECTIONS: Consolidate relevant outgoing wikilink references in the "connections" array.
+6. STRICT LANGUAGE INVARIANCE: Maintain the exact same primary language as the source notes throughout the entire note (both title and content).
+7. OUTPUT: Provide your response as a valid JSON object with keys "title", "content", and "connections".
+"""
+
+
 
 def build_chained_context_block(
     previous_notes_json: Optional[str] = None,
     existing_titles: Optional[List[str]] = None,
-    unified_general_title: Optional[str] = None
+    unified_general_title: Optional[str] = None,
+    rag_notes: Optional[List[Dict[str, Any]]] = None,
+    global_concept_map: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Builds reference context block from preceding document chunks to prevent duplicate concepts."""
-    if not (previous_notes_json or existing_titles or unified_general_title):
+    if not (previous_notes_json or existing_titles or unified_general_title or rag_notes or global_concept_map):
         return ""
 
     context_sections = []
@@ -48,12 +105,50 @@ def build_chained_context_block(
         context_sections.append(
             f'DOCUMENT TOPIC (CANONICAL NARRATIVE LANGUAGE ANCHOR): "{unified_general_title}"'
         )
-    if existing_titles:
+
+    # Tier 1: Panoramic Concept Map of ALL accumulated notes
+    if global_concept_map:
+        lines = []
+        for c in global_concept_map:
+            cid = c.get("id", "?")
+            ctitle = c.get("title", "")
+            cmech = c.get("core_mechanism", "")
+            if cmech:
+                lines.append(f'- [ID {cid}] "{ctitle}": {cmech}')
+            else:
+                lines.append(f'- [ID {cid}] "{ctitle}"')
+        concept_map_str = "\n".join(lines)
+        context_sections.append(
+            "TIER 1 — GLOBAL CONCEPT INVENTORY (ALL PREVIOUSLY EXTRACTED NOTES):\n"
+            "The following list represents EVERY concept already compiled from earlier sections of this document.\n"
+            "Review this inventory carefully; any prospective concept sharing an underlying mechanism with any item below is a DUPLICATE and MUST NOT be re-extracted:\n"
+            f"{concept_map_str}"
+        )
+    elif existing_titles:
         titles_list_str = ", ".join(f'"{t}"' for t in existing_titles)
         context_sections.append(
             f"EXISTING TITLES (STRICTLY FORBIDDEN TO RE-EXTRACT OR PARAPHRASE):\n[{titles_list_str}]"
         )
-    if previous_notes_json:
+
+    # Tier 2: Focal notes retrieved via Vector Embeddings + Qwen3 Reranker
+    if rag_notes:
+        rag_payload = [
+            {
+                "id": n.get("id"),
+                "title": n.get("title", ""),
+                "content": n.get("content", "")
+            }
+            for n in rag_notes
+            if n.get("title")
+        ]
+        rag_json = json.dumps(rag_payload, ensure_ascii=False, indent=2)
+        context_sections.append(
+            "PREVIOUS NOTES (REFERENCE) [TIER 2 — FOCAL NOTES WITH FULL CONTENT]:\n"
+            "The following notes are the most semantically relevant to this specific text segment (retrieved via neural embeddings and cross-encoder reranking).\n"
+            "Examine their full theoretical explanations and mathematical formulas to avoid re-extracting their mechanisms and to link new concepts to them:\n"
+            f"```json\n{rag_json}\n```"
+        )
+    elif previous_notes_json:
         context_sections.append(f"PREVIOUS NOTES (REFERENCE):\n```json\n{previous_notes_json}\n```")
 
     return (
@@ -69,17 +164,22 @@ def build_note_extraction_prompt(
     existing_titles: Optional[List[str]] = None,
     unified_general_title: Optional[str] = None,
     custom_system_prompt: Optional[str] = None,
+    rag_notes: Optional[List[Dict[str, Any]]] = None,
+    global_concept_map: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
     Builds standard Zettelkasten extraction prompt used across all AI providers.
     Enforces unified JSON schema with 'general_title', 'conceptual_analysis', and 'notes',
     instructing models to deliberate conceptually before generating atomic notes.
     Accepts optional custom_system_prompt with strict core rule precedence.
+    Supports Two-Tier RAG: Tier 1 global concept map + Tier 2 focal notes with full content.
     """
     chained_context_block = build_chained_context_block(
         previous_notes_json=previous_notes_json,
         existing_titles=existing_titles,
-        unified_general_title=unified_general_title
+        unified_general_title=unified_general_title,
+        rag_notes=rag_notes,
+        global_concept_map=global_concept_map,
     )
 
     custom_instructions_block = ""
@@ -99,31 +199,35 @@ The core system rules above (valid JSON schema, strict language matching, and at
         else "- 'general_title': Overarching topic of the document in the document's primary narrative language."
     )
 
-    return f"""You are an expert knowledge architect and researcher specialized in Niklas Luhmann's Zettelkasten method.
-Your task is to extract deeply analyzed, highly detailed, yet strictly atomic Zettelkasten notes from the text below.
+    return f"""You are an expert knowledge architect, research scholar, and deterministic knowledge compiler specialized in Niklas Luhmann's Zettelkasten method.
+Your task is to extract deeply analyzed, highly detailed, yet strictly atomic Zettelkasten notes from the text below across any scientific, technological, philosophical, legal, historical, or academic domain.
 Output MUST be a valid JSON object with 'general_title', 'conceptual_analysis', and 'notes'.
 
 {chained_context_block}
 RULES AND GUIDELINES:
 
-1. CONCEPTUAL ANALYSIS & CONTRASTIVE AUDIT (REASONING):
+1. CONCEPTUAL ANALYSIS & CONTRASTIVE AUDIT (FIRST-PRINCIPLES DELIBERATION):
    - Before generating atomic notes, deliberate and formulate your reasoning inside 'conceptual_analysis':
-     * 'core_thesis': Articulate the overarching thesis, theoretical foundation, and central argument of the document in 2-3 concise sentences.
-     * 'candidate_audit': Contrast each prospective concept from this chunk against PREVIOUS NOTES and EXISTING TITLES:
-       - Criterion of Distinctness: Does this concept introduce an independent, distinct theoretical mechanism, rival hypothesis, or different operational model that stands on its own (e.g., Conditional Beta Convergence vs Absolute Beta Convergence)? If YES -> status: "APPROVED".
-       - Criterion of Redundancy (Section-Echo): Does this concept merely repeat, define, summarize, or empirically apply an existing theory already covered in earlier sections under a slightly varied name (e.g., repeating the definition, framework, or empirical estimation of an already established model)? If YES -> status: "REJECTED_DUPLICATE" and do NOT extract it into notes.
-     * 'atomic_breakdown': List only the APPROVED concepts (3-7 concept names, or empty if all prospective candidates were duplicates) to be extracted into notes without overlap.
+     * 'core_thesis': Articulate the overarching thesis, theoretical foundation, or central argument of the document in 2-3 concise sentences in the document's language.
+     * 'candidate_audit': Evaluate every prospective candidate concept using the First Principles of Conceptual Identity and Orthogonality against PREVIOUS NOTES (provided with full content) and EXISTING TITLES:
+       - Criterion of Distinctness (Orthogonality & Operational Autonomy): Does this concept introduce an independent theoretical mechanism, sectoral threshold framework, empirical experiment/proof, or systematic decision architecture with distinct operational parameters? If YES -> status: "APPROVED".
+       - Criterion of Redundancy (Section-Echo) & Subsumption Test: Does this candidate merely repeat the exact same invariant mechanism already captured in an existing note without presenting any novel empirical findings, distinct mathematical parameters, sectoral rules, or boundary conditions? If it is a 100% duplicate echo -> status: "REJECTED_DUPLICATE".
+     * 'atomic_breakdown': List ALL APPROVED concepts to be extracted into notes without artificial omission.
    - Keep 'conceptual_analysis' focused and brief to preserve maximum generation token budget for the atomic notes themselves.
    - Express all analytical deliberation exclusively inside this JSON object. Do not output any commentary or tags outside the JSON.
 
 2. STRICT LANGUAGE MATCHING:
    - NEVER MIX LANGUAGES: The entire document possesses ONE canonical narrative language (the author's primary language for explanatory prose in the document body). Every note title, analytical deliberation in 'conceptual_analysis', and explanatory exposition in 'content' MUST be written strictly in this primary narrative language.
    - IMMUNITY TO EMBEDDED FOREIGN FRAGMENTS (NO DRIFT): Individual text chunks often contain embedded foreign-language elements—such as statistical or regression tables, variable names, programming code snippets, foreign abstracts, or international bibliographic citations (e.g., '[Author, Year]'). You must NEVER switch the note's prose, reasoning, or title into that foreign language. Articulate the findings, mechanisms, and theories presented in those tables or citations entirely within the document's primary narrative language.
-   - PRESERVATION OF CANONICAL TECHNICAL TERMS & ACRONYMS: Do NOT awkwardly force-translate established, universally recognized international technical terms, discipline-specific model names, scientific nomenclature, or standard acronyms (e.g., retain authentic terms like 'CRISPR-Cas9', 'ANOVA', 'Random Effects', 'Beta-Convergence', 'API', 'GMM' as conventionally used in academic literature). While preserving these technical names and acronyms authentic to their discipline, write all surrounding sentences, verbs, and explanations strictly in the document's primary narrative language.
+   - PRESERVATION OF CANONICAL TECHNICAL TERMS & ACRONYMS: Do NOT awkwardly force-translate established, universally recognized international technical terms, discipline-specific model names, scientific nomenclature, or standard acronyms (e.g., retain authentic terms like 'CRISPR-Cas9', 'ANOVA', 'Random Effects', 'Beta-Convergence', 'API', 'GMM', 'Transformer', 'Nash Equilibrium', 'mRNA' as conventionally used in academic literature). While preserving these technical names and acronyms authentic to their discipline, write all surrounding sentences, verbs, and explanations strictly in the document's primary narrative language.
 
 3. ATOMIC ZETTELKASTEN NOTES:
-   - ATOMIC SCOPE: Each note represents ONE specific concept, distinct model, or independent theoretical mechanism. If the text covers genuinely distinct mechanisms, extensions, or competing hypotheses with different theoretical premises (e.g., Absolute vs Conditional convergence, or distinct econometric estimation models), create separate atomic notes for each. However, internal dimensions of the same theory (its bare definition, narrative introduction, and specific empirical sample table) belong together in a single comprehensive note and must NOT be fragmented across multiple shallow notes.
-   - PURE CONCEPTUAL TITLES: 'title' must be the canonical, universal name of the concept in the document's language (e.g., 'Conditional Beta Convergence', 'Swamy Random Coefficients Model'). Do NOT include narrative section qualifiers or stylistic markers in titles (e.g., avoid appending 'Theoretical Foundations of...', 'Definition and Application of...', 'Framework of...', 'Overview of...'). Never use structural labels, numbers, or citations as titles (e.g., 'Chapter 1', 'Section 2', 'Article 5', 'Figure 3', '[12]').
+   - COMPREHENSIVE SCOPE: Each note represents ONE specific concept, distinct model, sectoral framework, empirical validation, or procedural methodology. Extract ALL distinct concepts present in this text segment without artificial omission. Do NOT limit extraction to only 1 or 2 notes if the text contains multiple valuable and distinct concepts.
+   - PURE CONCEPTUAL TITLES: 'title' must be the canonical, universal name of the concept in the document's language in clean plain text (e.g., 'Conditional Beta Convergence', 'Swamy Random Coefficients Model').
+     * NEVER use LaTeX math syntax, Greek symbols in math delimiters, or dollar signs inside titles (e.g., write 'Beta Convergence', NEVER 'Beta ($beta$) Convergence' or '$\beta$-Yakınsama').
+     * NEVER append parenthetical aliases, alternate spellings, or narrative qualifiers in titles (e.g., write 'Thomas Malthus', NEVER 'Thomas Robert Malthus (T. R. Malthus)').
+     * Do NOT include narrative section qualifiers or stylistic markers in titles (avoid 'Theoretical Foundations of...', 'Definition and Application of...', 'Framework of...', 'Overview of...').
+     * Never use structural labels, numbers, or citations as titles (e.g., 'Chapter 1', 'Section 2', 'Article 5', 'Figure 3', '[12]').
    - DEPTH OVER BREVITY: "Atomic" does NOT mean brief, superficial, or an executive summary. Strictly avoid shallow 1-2 sentence abstracts. Delve deeply and thoroughly into every topic.
    - CONTENT STRUCTURE: The 'content' of each note must be an autonomous, self-contained, and comprehensive exposition covering:
      a. Core Definition & Theoretical Basis: Precise explanation of what the concept is and its foundational premise.
@@ -140,16 +244,24 @@ RULES AND GUIDELINES:
 {collection_rule}
 
 4. NATURAL STRUCTURAL BRANCHING & LINKS (FOLGEZETTEL):
-   - Only AFTER all notes are completely written in 'notes', specify authentic structural relationships in a top-level 'links' array using the integer note IDs ('source' and 'target').
+   - Only AFTER all notes are completely written in 'notes', specify authentic structural relationships in a top-level 'links' array using the integer note IDs ('source' and 'target') or exact titles.
+   - You may link new notes to any of the PREVIOUS NOTES (using their integer 'id' or title) if the new concept is an authentic continuation, dependency, sub-mechanism, or critique of a previously established note.
    - Link sub-components to their architectural system (e.g., Note 2 belongs to Note 1: {{"source": 1, "target": 2}}), direct objections to the premises they critique, or sequential mechanisms.
-   - If notes in this chunk are independent definitions or axioms with no structural dependency between them, provide an empty list: "links": []. Never invent forced or artificial connections.
+   - If notes in this chunk are independent definitions or axioms with no structural dependency, provide an empty list: "links": []. Never invent forced or artificial connections.
 
 5. DEDICATED NEW NOTES (NO DUPLICATES) & STRICT CONCEPT DEDUPLICATION (SECTION-ECHO FILTERING):
-   - ACADEMIC SECTION-ECHO RULE: Technical and academic papers repeatedly reference, define, and re-summarize the same core theories across Introduction, Literature Review, Methodology, and Discussion sections. If a theory or concept was already extracted in a previous chunk, its reappearance in subsequent methodology or results sections is a narrative echo, NOT a new concept. Do not generate duplicate notes for recurring theories unless a genuinely new model or distinct theoretical formulation is introduced.
-   - NEVER bypass deduplication by creating slight variations or paraphrased synonyms of existing titles (e.g., creating 'X Setup' when 'X Structure' already exists, or appending 'Application' / 'Model' to an established topic).
-   - PERMISSION TO OMIT (EMPTY NOTES ALLOWED): If the text in this chunk primarily elaborates, tests, or continues concepts that are already captured in PREVIOUS NOTES or EXISTING TITLES without introducing genuinely new models or theories, output an empty notes array: "notes": []. A concise set of truly distinct, high-fidelity notes is vastly superior to redundant, fragmented variations.
+   - FIRST PRINCIPLES OF CONCEPTUAL IDENTITY:
+     In Niklas Luhmann's Zettelkasten, an atomic note represents an autonomous knowledge unit.
+     Avoid verbatim duplicates: Never re-extract the exact same general definition under cosmetic title variations if no new operational parameters, formulas, or findings are introduced.
+   - ACADEMIC SECTION-ECHO RULE & RAG DEDUPLICATION:
+     Authors naturally re-introduce, summarize, and echo the same foundational concepts across different sections. Examine PREVIOUS NOTES to filter out pure verbatim echoes.
+     However, distinct sectoral adaptation models (e.g. clinical dentistry tolerances, medical display calibration, liquid food analysis), concrete empirical experiments (e.g. dataset bias proofs, controlled benchmark tests), and procedural quality-control architectures MUST be extracted as distinct knowledge cards so no vital scientific knowledge is omitted.
+   - PERMISSION TO OMIT (EMPTY NOTES ALLOWED) — THE CARDINALITY CONTRACT:
+     When a chunk contains only transitional filler or repeats already extracted concepts with zero new empirical, sectoral, or theoretical substance, output an empty notes array:
+     "notes": []
+     and set "atomic_breakdown": [] inside 'conceptual_analysis'.
    - NOTE ON SECTION OVERLAP: The beginning of this text may contain a brief sentence overlap from the preceding section to maintain narrative continuity. Do NOT extract notes from repeated introductory text if the underlying concept was already extracted in previous sections.
-   - Only extract genuine, distinct, and newly introduced concepts that appear for the first time in this text.
+   - Only extract genuine, distinct, and newly introduced concepts that appear in this text.
 
 JSON FORMAT:
 {{
@@ -159,16 +271,18 @@ JSON FORMAT:
     "candidate_audit": [
       {{
         "candidate": "<Primary candidate concept discovered in this text>",
-        "contrast_with_existing": "<Theoretical justification explaining why this concept introduces a distinct, independent mechanism not covered in existing notes>",
+        "matched_existing_concept": "NONE_ORTHOGONALLY_NOVEL",
+        "contrast_with_existing": "<Demonstrates that this concept introduces a fundamentally independent, orthogonal mechanism or sectoral framework not subsumed by any existing note>",
         "status": "APPROVED"
       }},
       {{
-        "candidate": "<Secondary candidate concept repeating an existing idea>",
-        "contrast_with_existing": "<Identifies that this idea is an empirical application or narrative restatement of an already extracted concept>",
+        "candidate": "<Secondary candidate concept sharing an identical mechanism with an existing note without new evidence>",
+        "matched_existing_concept": "<Exact title of the matching PREVIOUS NOTE or EXISTING TITLE>",
+        "contrast_with_existing": "<Identifies that this idea is an identical verbatim echo without new parameters or evidence>",
         "status": "REJECTED_DUPLICATE"
       }}
     ],
-    "atomic_breakdown": "<Approved concept names to extract into notes>"
+    "atomic_breakdown": "<Approved concept names to extract into notes, or empty array [] if all rejected>"
   }},
   "notes": [
     {{
@@ -178,8 +292,13 @@ JSON FORMAT:
     }},
     {{
       "id": 2,
-      "title": "<Canonical name of the second distinct concept, preserving established technical terms/acronyms>",
+      "title": "<Canonical name of second distinct concept, sectoral framework, or empirical proof>",
       "content": "<Detailed self-contained analysis of the second distinct concept adhering to the atomic exposition structure above, formatted in LaTeX and clean Markdown.>"
+    }},
+    {{
+      "id": 3,
+      "title": "<Canonical name of third distinct concept, methodology, or decision procedure>",
+      "content": "<Detailed self-contained analysis of the third distinct concept adhering to the atomic exposition structure above, formatted in LaTeX and clean Markdown.>"
     }}
   ],
   "links": [

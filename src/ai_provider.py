@@ -36,6 +36,17 @@ class BaseAiProvider(ABC):
         """
         return notes
 
+    def synthesize_note_cluster(
+        self,
+        cluster_notes: List[Dict[str, Any]],
+        on_progress: Optional[Callable[[str], None]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        N-way synthesis of overlapping or duplicate notes in a cluster into a single cohesive note.
+        Default implementation returns None, signaling to use algorithmic rule-based synthesis fallback.
+        """
+        return None
+
 
 def create_ai_provider(
     provider_type: str,

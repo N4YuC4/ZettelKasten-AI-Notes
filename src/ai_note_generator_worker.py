@@ -21,6 +21,8 @@ from typing import Optional, Callable, List, Dict, Any
 from ai_provider import BaseAiProvider, create_ai_provider
 from gemini_api_client import GeminiApiClient, GeminiApiError, GeminiAuthError, GeminiRateLimitError
 from local_gguf_client import LocalGgufClient, LocalLlmError, LocalModelNotFoundError, LocalModelOOMError
+from semantic_memory_service import EmbeddingModelNotFoundError
+from reranker_service import RerankerService, RerankerModelNotFoundError
 import local_models_catalog
 import model_downloader
 from hardware_checker import HardwareChecker
@@ -402,6 +404,15 @@ class AiNoteGeneratorWorker:
                 and str(nd.get('title', '')).strip().lower() not in ('untitled note', 'new note')
             ]
 
+            # Universal semantic deduplication pass across all notes in the generated batch
+            try:
+                from semantic_memory_service import SemanticMemoryService
+                mem_svc = SemanticMemoryService()
+                if mem_svc.is_model_available():
+                    generated_notes = mem_svc.consolidate_and_deduplicate_notes(generated_notes)
+            except Exception as dedup_err:
+                log_debug(f"AiNoteGeneratorWorker: Semantic deduplication pass skipped or failed: {dedup_err}")
+
             title_to_id = db_manager_worker.get_all_note_titles_and_ids()
             used_titles = set(title_to_id.keys())
             batch_title_to_id = {}
@@ -514,11 +525,20 @@ class AiNoteGeneratorWorker:
 
             try:
                 if embeddings_to_insert:
-                    db_manager_worker.bulk_insert_notes_and_links(
-                        notes_to_insert,
-                        links_to_insert,
-                        embeddings_data=embeddings_to_insert
-                    )
+                    try:
+                        db_manager_worker.bulk_insert_notes_and_links(
+                            notes_to_insert,
+                            links_to_insert,
+                            embeddings_data=embeddings_to_insert
+                        )
+                    except TypeError as te:
+                        if "embeddings_data" in str(te):
+                            db_manager_worker.bulk_insert_notes_and_links(
+                                notes_to_insert,
+                                links_to_insert
+                            )
+                        else:
+                            raise
                 else:
                     db_manager_worker.bulk_insert_notes_and_links(
                         notes_to_insert,
@@ -541,7 +561,7 @@ class AiNoteGeneratorWorker:
                 except Exception as cb_err:
                     log_error(f"Error in on_finished callback: {cb_err}\n{traceback.format_exc()}")
 
-        except (GeminiAuthError, GeminiRateLimitError, GeminiApiError, LocalLlmError) as ge:
+        except (GeminiAuthError, GeminiRateLimitError, GeminiApiError, LocalLlmError, EmbeddingModelNotFoundError, RerankerModelNotFoundError) as ge:
             err_msg = str(ge)
             log_error(f"AiNoteGeneratorWorker AI error: {err_msg}")
             if self.on_error:
@@ -566,11 +586,16 @@ class AiNoteGeneratorWorker:
                 except Exception as cb_err:
                     log_error(f"Error in on_error callback: {cb_err}")
         finally:
-            # Explicitly unload local LLM from RAM/VRAM to free memory immediately after completion
+            # Explicitly unload local LLM and Reranker from RAM/VRAM to free memory immediately after completion
             try:
                 LocalGgufClient.unload_cached_model()
             except Exception as unload_err:
                 log_error(f"Error unloading local GGUF model: {unload_err}")
+
+            try:
+                RerankerService.unload_cached_model()
+            except Exception as unload_err:
+                log_error(f"Error unloading reranker model: {unload_err}")
 
             if db_manager_worker:
                 try:

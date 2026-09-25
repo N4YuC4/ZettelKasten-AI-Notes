@@ -18,19 +18,29 @@ A powerful, privacy-first desktop knowledge management system implementing the *
 
 ## 🌟 Key Features
 
-### 🧠 Dual AI Note Extraction Engine
+### 🧠 Dual AI Note Extraction & Two-Tier RAG Engine
 * **Cloud AI (Google Gemini)**: Fast, high-throughput extraction using the official `google-genai` SDK (v2.22.0).
 * **Offline Local AI (GGUF via Vulkan)**: 100% offline, privacy-first local inference powered by `llama-cpp-python` with cross-vendor **Vulkan GPU acceleration** (AMD, NVIDIA, Intel, Apple Silicon).
+* **Two-Tier In-Memory RAG Pool (`note_rag_pool.py`)**: Stateful session RAG pool that eliminates cross-chunk concept duplication during multi-chunk PDF/text processing:
+  * **Tier 1 (Global Concept Map)**: Complete bird's-eye view of all accumulated notes with canonical IDs, titles, and 1-sentence core mechanism summaries.
+  * **Tier 2 (Focal Note Retrieval)**: Dynamically budgeted focal note injection using Microsoft Harrier (0.6B) bi-encoder vector similarity + Qwen3-Reranker (0.6B) cross-encoder scoring.
+  * **Global Union-Find Reconciliation**: Discovers multi-way transitive duplicate clusters across document chunks and consolidates them via LLM or algorithmic non-redundant synthesis while remapping wikilinks and graph edges.
+* **CPU Cross-Encoder Reranker (`reranker_service.py`)**: High-precision semantic relevance scoring powered by `Qwen3-Reranker-0.6B`. Evaluates `(query, note)` pairs using instruction-aware cross-attention and calibrated sigmoid logit difference (`logit("yes") - logit("no")`). Runs strictly on CPU (`n_threads=2`, `n_gpu_layers=0`) to preserve 100% of GPU VRAM for generation LLMs.
 * **Process-Isolated Execution**: Local inference runs inside an isolated `multiprocessing` worker. This prevents GUI thread deadlocks with Wayland/Vulkan presentation hooks, ensures a 100% responsive UI during heavy computation, and guarantees immediate RAM/VRAM reclamation upon completion or cancellation.
 * **Intelligent Response Parsing (`AiResponseParser`)**: Robust multi-strategy JSON extraction that sanitizes connections, cleans citations (`[1]`, `[Smith et al.]`), ignores structural markers (Figure, Table, Section, Clause), and repairs malformed LLM responses.
 * **Dynamic Semantic Chunking (`semantic_chunker.py`)**: Universal dynamic chunker shared between Cloud and Local AI. Automatically splits long PDF extractions along semantic paragraph, sentence, and word boundaries with adaptive token overlap (~4500 tokens default) to prevent context truncation and ensure coherent note synthesis.
 
 ### 📦 In-App Model Manager & Downloader
 * **Curated Model Catalog (`local_models_catalog.py`)**:
-  * **Gemma 4 (E2B)** *(3.2 GB)*: Lightweight & ultra-fast with a 128K context window. Suitable for any desktop or laptop.
-  * **Gemma 4 (12B)** *(6.2 GB)*: Balanced, deep conceptual analysis for academic papers, theses, and technical books.
-  * **Gemma 4 (26B MoE)** *(13.1 GB)*: Flagship Mixture-of-Experts architecture for deep synthesis across multidisciplinary domains.
-* **Built-in Chunked HTTP Downloader (`model_downloader.py`)**: Download models directly from Hugging Face within the UI with live progress indicators, speed calculation, ETA estimation, cancellation, and local storage management.
+  * **Generation Models (Gemma 4 Family)**:
+    * **Gemma 4 (E2B)** *(3.2 GB)*: Lightweight & ultra-fast with a 128K context window. Suitable for any desktop or laptop.
+    * **Gemma 4 (12B)** *(6.2 GB)*: Balanced, deep conceptual analysis for academic papers, theses, and technical books.
+    * **Gemma 4 (26B MoE)** *(13.1 GB)*: Flagship Mixture-of-Experts architecture for deep synthesis across multidisciplinary domains.
+  * **Semantic Memory / Embedding Model**:
+    * **Microsoft Harrier (0.6B)** *(396 MB)*: 32K context multilingual embedding model (1024 dims) powering vector indexing and semantic link discovery on CPU.
+  * **Cross-Encoder Reranker Model**:
+    * **Qwen3 Reranker (0.6B)** *(396 MB)*: 32K context cross-encoder providing instruction-aware candidate re-scoring on CPU.
+* **Built-in Chunked HTTP Downloader (`model_downloader.py`)**: Download models directly from Hugging Face within the UI with live progress indicators, speed calculation, ETA estimation, cancellation, and local storage management (stored under user data directory `~/.local/share/zettelkasten_ai/models/` to keep the Git repository clean).
 
 ### 🛡️ Hardware Resource Inspector & OOM Guard (`hardware_checker.py`)
 * Automatically detects host system RAM, CPU cores, GPU devices, and available VRAM.
@@ -95,9 +105,12 @@ The codebase is designed with clean architecture and SOLID principles, strictly 
    │ SidebarView        │                                         │ NoteService         │
    │ EditorWorkspaceView│                                         │ DatabaseManager     │
    │ RightPanelView     │                                         │ SettingsManager     │
-   │ DialogManager      │                                         │ HardwareChecker     │
-   │ Splitters          │                                         │ ModelDownloader     │
-   └────────────────────┘                                         │ PdfProcessor        │
+   │ DialogManager      │                                         │ NoteRagPool         │
+   │ Splitters          │                                         │ RerankerService     │
+   └────────────────────┘                                         │ SemanticMemory      │
+                                                                  │ HardwareChecker     │
+                                                                  │ ModelDownloader     │
+                                                                  │ PdfProcessor        │
                                                                   │ SemanticChunker     │
                                                                   └──────────┬──────────┘
                                                                              │
@@ -108,19 +121,30 @@ The codebase is designed with clean architecture and SOLID principles, strictly 
                                                                ▼             ▼            ▼
                                                           GeminiClient  LocalGgufClient  Parser
                                                           (Cloud SDK)   (Vulkan / GGUF)  (Sanitizer)
+                                                                             │
+                                                               ┌─────────────┴────────────┐
+                                                               │ CPU Auxiliary Inference  │
+                                                               ├─────────────┬────────────┤
+                                                               ▼             ▼            │
+                                                          Harrier-0.6B   Qwen3-0.6B       │
+                                                          (Embeddings)   (Reranker)       │
+                                                                             │            │
+                                                                             └────────────┘
 ```
 
 ---
 
 ## 💻 Hardware Requirements for Local AI
 
-| Model Tier | Model Name | Recommended RAM | VRAM (for Full GPU Offload) | Context Window |
-| :--- | :--- | :--- | :--- | :--- |
-| **Lightweight** | Gemma 4 (E2B) | 8 GB | 4 GB | 128K tokens |
-| **Balanced** | Gemma 4 (12B) | 16 GB | 8–10 GB | 128K tokens |
-| **Flagship** | Gemma 4 (26B MoE) | 32 GB | 16+ GB | 128K tokens |
+| Model Tier | Model Name | Recommended RAM | VRAM (for Full GPU Offload) | Context Window | Mode |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Embedding** | Microsoft Harrier (0.6B) | 2–4 GB | 0 GB (CPU-only, isolated) | 32K tokens | CPU (`n_threads=2`) |
+| **Reranker** | Qwen3 Reranker (0.6B) | 2–4 GB | 0 GB (CPU-only, isolated) | 32K tokens | CPU (`n_threads=2`) |
+| **Lightweight** | Gemma 4 (E2B) | 8 GB | 4 GB | 128K tokens | Vulkan GPU / CPU |
+| **Balanced** | Gemma 4 (12B) | 16 GB | 8–10 GB | 128K tokens | Vulkan GPU / CPU |
+| **Flagship** | Gemma 4 (26B MoE) | 32 GB | 16+ GB | 128K tokens | Vulkan GPU / CPU |
 
-> **Note:** If you do not have a dedicated GPU, models will automatically offload to CPU RAM using multi-threaded CPU inference. Cloud AI (Google Gemini) has no local hardware requirements.
+> **Note:** Embeddings and reranking models run strictly on CPU to guarantee zero VRAM competition with generator LLMs. If you do not have a dedicated GPU, generation models will also automatically offload to CPU RAM. Cloud AI (Google Gemini) has no local hardware requirements.
 
 ---
 
@@ -154,6 +178,7 @@ cd Zettelkasten-AI-Notes
 ```
 
 ### 2. Set Up Virtual Environment
+Create and activate an isolated Python 3.13 virtual environment (the `.venv` directory is kept local and uncommitted):
 ```bash
 python3.13 -m venv .venv
 
@@ -170,21 +195,8 @@ pip install -r requirements.txt
 ```
 *(Note: `requirements.txt` includes the Vulkan wheel index for `llama-cpp-python`)*.
 
-### 4. Configuration
-
-#### Option A: Using Google Gemini (Cloud AI)
-1. Obtain an API key from [Google AI Studio](https://aistudio.google.com/).
-2. Launch the application and configure the API key directly in the in-app **Settings (`⚙️`) -> AI Settings -> Gemini API Key**.
-3. The key and all application preferences are stored locally and securely in `db/settings.db` (git-ignored to ensure API keys and settings are never committed to version control).
-
-#### Option B: Using Local GGUF Models (Offline AI)
-1. Launch the application.
-2. Set AI Provider to **Local GGUF**.
-3. Navigate to **Settings (`⚙️`) -> Local Model Manager**.
-4. Choose a model tier (e.g., **Gemma 4 E2B**) and click **Download**.
-5. Select the downloaded model as your active local model. 
-
-### 5. Run the Application
+### 4. Run the Application (Zero-Configuration Initialization)
+Run the application directly using your virtual environment:
 ```bash
 # Using the dedicated virtualenv:
 ./.venv/bin/python src/main.py
@@ -192,6 +204,27 @@ pip install -r requirements.txt
 # Or via Flet CLI inside the activated venv:
 flet run src/main.py
 ```
+
+> **Automated Local Storage Initialization**:
+> When cloned fresh from GitHub, the repository does not include local user data or database files. On the very first launch, the app **automatically creates** the local `db/` storage directory, initializes `db/notes.db` and `db/settings.db` (configured with SQLite WAL mode and foreign key cascades), and sets up rotating application logs in `logs/debug.log`.
+> **No manual SQLite setup, database schema imports, or migration commands are needed.**
+
+### 5. AI Engine & Model Setup
+
+#### Option A: Using Google Gemini (Cloud AI)
+1. Obtain an API key from [Google AI Studio](https://aistudio.google.com/).
+2. Open in-app **Settings (`⚙️`) -> AI Settings -> Gemini API Key** and enter your key.
+3. The key is persisted locally in `db/settings.db`. No `.env` file or environment variable export is needed.
+
+#### Option B: Using Offline Local AI & Multi-Chunk RAG
+The application features a Two-Tier In-Memory RAG Pool (`NoteRagPool`) that eliminates cross-chunk concept duplication. To use offline note generation:
+1. Open the application and navigate to **Settings (`⚙️`) -> Local Model Manager**.
+2. **Download Microsoft Harrier (0.6B)**: Mandatory 32K embedding model used for vector indexing and candidate retrieval.
+3. **Download Qwen3 Reranker (0.6B)**: Mandatory 32K cross-encoder reranker used for high-precision duplicate elimination and semantic scoring.
+4. **Download a Generation Model**: Choose your preferred generation tier (e.g. **Gemma 4 E2B** for lightweight fast generation or **12B** for deep analysis).
+5. Set AI Provider to **Local GGUF** and select your active model.
+
+*Note: Models are downloaded directly from Hugging Face into your user data directory (`~/.local/share/zettelkasten_ai/models/`), keeping large GGUF binaries cleanly separated from the Git repository.*
 
 ---
 
@@ -225,12 +258,16 @@ Zettelkasten-AI-Notes/
 │   ├── model_downloader.py         # Chunked HTTP model downloader with progress reporting
 │   ├── models.py                   # Domain dataclasses (Note, NoteMetadata, NoteLink)
 │   ├── note_manager.py             # Backward-compatible note manager adapter
+│   ├── note_rag_pool.py            # In-memory session vector RAG pool, two-tier retrieval & reconciliation
 │   ├── note_service.py             # Core business logic (CRUD, sanitization, LaTeX, wikilinks)
 │   ├── pdf_processor.py            # PDF text extraction and document chunking
 │   ├── prompt_templates.py         # Structured Zettelkasten extraction prompt templates
+│   ├── reranker_service.py         # Dedicated CPU cross-encoder reranking service (Qwen3-Reranker-0.6B)
 │   ├── semantic_chunker.py         # Universal dynamic semantic text chunker (sentence & paragraph boundary balancing)
+│   ├── semantic_memory_service.py  # Local CPU embedding inference (Microsoft Harrier 0.6B) and vector store
 │   └── settings_manager.py         # Dedicated SQLite configuration repository (db/settings.db)
-├── tests/                          # Automated pytest suite (212 tests across 18 files)
+├── tests/                          # Automated pytest suite (268 tests across 21 files)
+│   ├── conftest.py
 │   ├── test_ai_provider.py
 │   ├── test_ai_response_parser.py
 │   ├── test_ai_worker_and_pdf.py
@@ -246,7 +283,10 @@ Zettelkasten-AI-Notes/
 │   ├── test_model_downloader.py
 │   ├── test_models_and_service.py
 │   ├── test_note_manager.py
+│   ├── test_note_rag_pool.py
+│   ├── test_reranker_service.py
 │   ├── test_semantic_chunker.py
+│   ├── test_semantic_memory_service.py
 │   ├── test_settings_manager.py
 │   └── test_ui_components.py
 ├── requirements.txt                # Project dependencies
@@ -254,33 +294,35 @@ Zettelkasten-AI-Notes/
 └── README.md                       # Project documentation
 ```
 
-### 🔒 Data Privacy & Git-Ignored Runtime Files
-In strict compliance with [`.gitignore`](.gitignore), private user data, runtime databases, local configuration secrets, and development artifacts are decoupled from version control and never tracked:
-* `db/` — SQLite databases (`notes.db`, `settings.db`, WAL and SHM files). Automatically initialized on first launch.
-* `logs/` — Centralized rotating application debug logs (`debug.log`).
-* `docs/` — Local design documents, architecture notes, and feature roadmaps.
+### 🔒 Data Privacy & Repository Cleanliness
+In strict compliance with [`.gitignore`](.gitignore), all user-generated content, runtime databases, local configuration secrets, and development artifacts remain strictly local and are never tracked in Git:
+* `db/` — SQLite databases (`notes.db`, `settings.db`, WAL and SHM journal files). Created automatically on first application start.
+* `logs/` — Centralized rotating application debug logs (`debug.log`). Created automatically on first start.
+* `docs/` — Local design documents, architecture notes, and developer roadmaps.
 * `.venv/` — Dedicated Python 3.13 virtual environment.
-* `.env` — Legacy environment secrets (superseded by SQLite `settings.db`).
+* `.env` — Legacy environment files (fully superseded by SQLite `settings.db`).
 * `AGENTS.md` — AI assistant context instructions and persistent project guidelines.
+
+*(Additionally, all GGUF models downloaded via the in-app Model Manager reside in the user's OS data directory `~/.local/share/zettelkasten_ai/models/`, preventing multi-gigabyte binary bloat in the git tree.)*
 
 ---
 
 ## 🧪 Testing & Verification
 
-The project includes an extensive automated test suite covering domain logic, UI view controls, AI parsers, SQLite transactions, and hardware detection:
+The project includes an extensive automated test suite covering domain logic, UI view controls, AI parsers, SQLite transactions, RAG vector retrieval, cross-encoder reranking, and hardware detection:
 
 ```bash
-# Run the entire test suite (212 tests):
+# Run the entire test suite (268 tests):
 ./.venv/bin/pytest
 
 # Run tests with verbose output:
 ./.venv/bin/pytest -v
 
 # Run a specific test suite:
-./.venv/bin/pytest tests/test_markdown_editor.py
+./.venv/bin/pytest tests/test_note_rag_pool.py
 ```
 
-All **212 tests** execute and pass in ~7-8 seconds.
+All **268 tests** execute and pass in ~15-16 seconds.
 
 ---
 

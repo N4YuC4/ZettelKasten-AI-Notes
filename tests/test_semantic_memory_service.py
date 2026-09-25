@@ -289,3 +289,208 @@ def test_compute_semantic_links_explicit_threshold_and_filters():
         assert (2, 3) in link_pairs
 
 
+def test_consolidate_and_deduplicate_notes_batch():
+    service = SemanticMemoryService(model_path="/fake/path")
+
+    v1 = np.zeros(1024, dtype=np.float32)
+    v1[0] = 1.0
+    v2 = np.zeros(1024, dtype=np.float32)
+    v2[0] = 0.98
+    v2[1] = 0.20
+    v2 = v2 / np.linalg.norm(v2)
+    v3 = np.zeros(1024, dtype=np.float32)
+    v3[2] = 1.0
+
+    notes = [
+        {
+            "id": 1,
+            "title": "Quantum Wavefunction",
+            "content": "Quantum wavefunction describes the probability amplitude of an isolated particle system over space and time in Hilbert space.",
+            "connections": [],
+            "_embedding": v1
+        },
+        {
+            "id": 2,
+            "title": "Quantum Wavefunction Function",
+            "content": "Quantum wavefunction function describes the probability amplitude of an isolated particle system over space and time in Hilbert space coordinates.",
+            "connections": ["Decoherence Theory"],
+            "_embedding": v2
+        },
+        {
+            "id": 3,
+            "title": "Decoherence Theory",
+            "content": "Environmental interaction suppresses quantum phase interference, producing classical macroscopic observables.",
+            "connections": ["Quantum Wavefunction Function"],
+            "_embedding": v3
+        }
+    ]
+
+    deduped = service.consolidate_and_deduplicate_notes(notes)
+    assert len(deduped) == 2
+    titles = [n["title"] for n in deduped]
+    assert "Quantum Wavefunction" in titles or "Quantum Wavefunction Function" in titles
+    assert "Decoherence Theory" in titles
+
+    # Check connection was remapped
+    decoherence_note = next(n for n in deduped if n["title"] == "Decoherence Theory")
+    surviving_quantum_title = next(t for t in titles if "Quantum" in t)
+    assert surviving_quantum_title in decoherence_note["connections"]
+
+
+def test_compute_semantic_links_orphan_protection():
+    service = SemanticMemoryService(model_path="/fake/path")
+
+    # 3 notes:
+    # 1 and 2 are strongly linked (sim 0.85)
+    # 3 is moderately linked to 2 (sim 0.65) but below high cutoff
+    v1 = np.zeros(1024, dtype=np.float32)
+    v1[0] = 1.0
+    v2 = np.zeros(1024, dtype=np.float32)
+    v2[0] = 0.85
+    v2[1] = 0.5267
+    v2 = v2 / np.linalg.norm(v2)
+    v3 = np.zeros(1024, dtype=np.float32)
+    v3[0] = 0.60
+    v3[1] = 0.40
+    v3[2] = 0.69
+    v3 = v3 / np.linalg.norm(v3)
+
+    notes = [
+        {"id": 1, "title": "Note Alpha", "content": "Content Alpha " * 15, "connections": []},
+        {"id": 2, "title": "Note Beta", "content": "Content Beta " * 15, "connections": []},
+        {"id": 3, "title": "Note Gamma", "content": "Content Gamma " * 15, "connections": []},
+    ]
+
+    fake_matrix = np.vstack([v1, v2, v3])
+    with patch.object(service, "embed_texts", return_value=fake_matrix):
+        # High threshold (0.80) would only link (1, 2).
+        # Orphan protection must connect Note Gamma (3) to its closest neighbor (2)!
+        link_pairs, _, _ = service.compute_semantic_links(
+            notes, similarity_threshold=0.80, prevent_orphans=True, min_orphan_similarity=0.50
+        )
+        all_linked_nodes = {p[0] for p in link_pairs} | {p[1] for p in link_pairs}
+        assert 1 in all_linked_nodes
+        assert 2 in all_linked_nodes
+        assert 3 in all_linked_nodes  # Orphan is protected!
+
+
+def test_compute_semantic_links_component_bridging():
+    service = SemanticMemoryService(model_path="/fake/path")
+
+    # 4 notes:
+    # (1, 2) is cluster 1 (sim 0.92)
+    # (3, 4) is cluster 2 (sim 0.92)
+    # Between clusters, (2, 3) has sim 0.72 (above quality floor 0.65, but below cutoff 0.85)
+    v1 = np.array([1.0, 0.0, 0.0, 0.0] + [0.0] * 1020, dtype=np.float32)
+    v2 = np.array([0.92, 0.39, 0.0, 0.0] + [0.0] * 1020, dtype=np.float32)
+    v2 = v2 / np.linalg.norm(v2)
+
+    v3 = np.array([0.72, 0.39, 0.57, 0.0] + [0.0] * 1020, dtype=np.float32)
+    v3 = v3 / np.linalg.norm(v3)
+    v4 = np.array([0.65, 0.35, 0.67, 0.0] + [0.0] * 1020, dtype=np.float32)
+    v4 = v4 / np.linalg.norm(v4)
+
+    notes = [
+        {"id": 1, "title": "Cluster 1 Note A", "content": "Content A " * 15, "connections": ["Cluster 1 Note B"]},
+        {"id": 2, "title": "Cluster 1 Note B", "content": "Content B " * 15, "connections": ["Cluster 1 Note A"]},
+        {"id": 3, "title": "Cluster 2 Note C", "content": "Content C " * 15, "connections": ["Cluster 2 Note D"]},
+        {"id": 4, "title": "Cluster 2 Note D", "content": "Content D " * 15, "connections": ["Cluster 2 Note C"]},
+    ]
+
+    fake_matrix = np.vstack([v1, v2, v3, v4])
+    with patch.object(service, "embed_texts", return_value=fake_matrix):
+        link_pairs, _, _ = service.compute_semantic_links(
+            notes, similarity_threshold=0.85, prevent_orphans=True, quality_floor=0.65
+        )
+        # Component bridging must create a bridge across the two clusters (2 <-> 3)
+        bridge_pairs = [(min(a, b), max(a, b)) for a, b in link_pairs if (a in (1, 2) and b in (3, 4)) or (b in (1, 2) and a in (3, 4))]
+        assert len(bridge_pairs) == 1
+        assert (2, 3) in bridge_pairs
+
+
+def test_consolidate_and_deduplicate_notes_n_way_cluster_synthesis():
+    service = SemanticMemoryService(model_path="/fake/path")
+
+    # 3 duplicate notes (high similarity 0.98), 1 distinct note (low similarity 0.20)
+    v_dup = np.array([1.0, 0.0, 0.0, 0.0] + [0.0] * 1020, dtype=np.float32)
+    v_distinct = np.array([0.0, 1.0, 0.0, 0.0] + [0.0] * 1020, dtype=np.float32)
+
+    notes = [
+        {"id": 1, "title": "CIEDE2000 Lightness Error", "content": "Under-prediction in low luminance. " * 10, "connections": []},
+        {"id": 2, "title": "CIEDE2000 Dark Patch Flaws", "content": "Dark patch under-prediction flaws. " * 10, "connections": []},
+        {"id": 3, "title": "CIEDE2000 L Metric Discrepancies", "content": "L* metric errors in dark regions. " * 10, "connections": []},
+        {"id": 4, "title": "Surface Roughness Effect", "content": "Micro-shadows and surface texture as detailed in [[CIEDE2000 Dark Patch Flaws]]. " * 5, "connections": ["CIEDE2000 Dark Patch Flaws"]},
+    ]
+
+    fake_matrix = np.vstack([v_dup, v_dup, v_dup, v_distinct])
+
+    # Mock AI provider with synthesize_note_cluster
+    mock_provider = MagicMock()
+    mock_provider.synthesize_note_cluster.return_value = {
+        "title": "Unified CIEDE2000 Lightness Error",
+        "content": "Fully synthesized and harmonized explanation of low luminance errors.",
+        "connections": ["Surface Roughness Effect"]
+    }
+
+    with patch.object(service, "embed_texts", return_value=fake_matrix), \
+         patch.object(service, "embed_text", return_value=v_dup):
+
+        surviving = service.consolidate_and_deduplicate_notes(notes, ai_provider=mock_provider)
+
+        # synthesize_note_cluster must be called exactly ONCE for the 3-note cluster
+        assert mock_provider.synthesize_note_cluster.call_count == 1
+        cluster_arg = mock_provider.synthesize_note_cluster.call_args[0][0]
+        cluster_titles = {n["title"] for n in cluster_arg}
+        assert "CIEDE2000 Lightness Error" in cluster_titles
+        assert "CIEDE2000 Dark Patch Flaws" in cluster_titles
+        assert "CIEDE2000 L Metric Discrepancies" in cluster_titles
+
+        # Surviving notes must be 2: Unified note + Surface Roughness
+        assert len(surviving) == 2
+        titles = [n["title"] for n in surviving]
+        assert "Unified CIEDE2000 Lightness Error" in titles
+        assert "Surface Roughness Effect" in titles
+
+        # Verify connection on note 4 was redirected from Part 2 to the unified title
+        note_4 = next(n for n in surviving if n["title"] == "Surface Roughness Effect")
+        assert "Unified CIEDE2000 Lightness Error" in note_4["connections"]
+        # Verify markdown body wikilink was also remapped
+        assert "[[Unified CIEDE2000 Lightness Error]]" in note_4["content"]
+
+
+def test_consolidate_lexical_fallback_deduplication():
+    """Verifies that consolidate_and_deduplicate_notes deduplicates notes on high lexical overlap even when cosine similarity is low."""
+    service = SemanticMemoryService(model_path="/fake/path")
+
+    v1 = np.zeros(1024, dtype=np.float32)
+    v1[0] = 1.0
+    v2 = np.zeros(1024, dtype=np.float32)
+    v2[0] = 0.50
+    v2[1] = np.sqrt(1 - 0.50**2)
+
+    fake_matrix = np.vstack([v1, v2])
+
+    notes = [
+        {
+            "id": 1,
+            "title": "Ayrım Boşluğu ve Hassasiyeti",
+            "content": "Renk örnekleri arasında fiziksel ayrım boşluğu bulunmadığında insan gözünün parlaklık ve ton algı hassasiyeti belirgin şekilde artış gösterir. " * 3,
+            "connections": []
+        },
+        {
+            "id": 2,
+            "title": "Ayrım Boşluğu (Gap Effect No-Separation) ve Hassasiyeti",
+            "content": "Renk örnekleri arasında fiziksel ayrım boşluğu bulunmadığında insan gözünün parlaklık ve ton algı hassasiyeti belirgin şekilde artış gösterir. " * 3,
+            "connections": []
+        }
+    ]
+
+    with patch.object(service, "embed_texts", return_value=fake_matrix), \
+         patch.object(service, "embed_text", return_value=v1):
+
+        surviving = service.consolidate_and_deduplicate_notes(notes)
+        assert len(surviving) == 1
+
+
+
+

@@ -430,54 +430,14 @@ class HardwareChecker:
     def calculate_adaptive_context_window(
         text_content: str = "",
         model_path: str = "",
-        model_max_ctx: int = 131072
+        model_max_ctx: int = 16384
     ) -> int:
         """
-        Calculates optimal, demand-driven context window:
-        1. 'Don't strain system needlessly': Allocates only what document needs (+ headroom) for short texts.
-        2. 'Low-End Safety': Limits context ceiling to 16K (or 8K) on constrained hardware.
-        3. 'Granular Scaling': Expands up to model_max_ctx in 4K blocks when document and hardware demand it.
-        Minimum context floor is 8192 tokens.
+        Fixed context window strictly set to 16K (16,384 tokens) across all profiles and documents.
         """
-        MIN_FLOOR = 8192
-
-        # 1. Estimate document token requirement (~3 chars per token)
-        doc_tokens = max(1, int(len(text_content) / 3.0)) if text_content else 0
-        output_budget = 4096
-        system_overhead = 2048
-        needed_tokens = doc_tokens + output_budget + system_overhead
-
-        # Round up to nearest 4096 block
-        target_doc_ctx = int(((needed_tokens + 4095) // 4096) * 4096)
-        target_doc_ctx = max(MIN_FLOOR, target_doc_ctx)
-
-        # 2. Check hardware performance profile & memory limits
-        profile = HardwareChecker.get_device_performance_profile()
-        mem = HardwareChecker.get_system_memory_info()
-        avail_ram_gb = mem["available_gb"]
-        total_ram_gb = mem["total_gb"]
-
-        # Safe ceilings by profile
-        if profile == "LOW_END":
-            # For weak / integrated / <=8GB RAM systems: never exceed 16K (or 8K if RAM < 2.5GB)
-            max_safe_ceiling = 8192 if avail_ram_gb < 2.5 else 16384
-        elif profile == "HIGH_END":
-            max_safe_ceiling = min(model_max_ctx, 262144 if total_ram_gb >= 32.0 else 131072)
-        else:  # STANDARD
-            model_size_gb = (os.path.getsize(model_path) / (1024 ** 3)) if (model_path and os.path.exists(model_path)) else 3.5
-            # For 12B+ models on 16GB RAM, keep max ceiling at 65536 to prevent VRAM overflow
-            if model_size_gb > 5.5:
-                max_safe_ceiling = min(model_max_ctx, 65536)
-            else:
-                max_safe_ceiling = min(model_max_ctx, 131072)
-
-        # Final context is the minimum between what document demands and what hardware safely allows
-        optimal_ctx = min(target_doc_ctx, max_safe_ceiling)
-        optimal_ctx = max(MIN_FLOOR, optimal_ctx)
-
+        FIXED_CONTEXT_WINDOW = 16384
         log_debug(
-            f"Adaptive context calculated: {optimal_ctx} tokens "
-            f"(Profile: {profile}, DocDemand: {target_doc_ctx}, SafeCeiling: {max_safe_ceiling}, AvailRAM: {avail_ram_gb:.1f}GB)"
+            f"Context window fixed at: {FIXED_CONTEXT_WINDOW} tokens (16K)."
         )
-        return optimal_ctx
+        return FIXED_CONTEXT_WINDOW
 

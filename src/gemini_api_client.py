@@ -74,15 +74,19 @@ class GeminiApiClient(BaseAiProvider):
         previous_notes_json: Optional[str] = None,
         existing_titles: Optional[List[str]] = None,
         unified_general_title: Optional[str] = None,
-        custom_system_prompt: Optional[str] = None
+        custom_system_prompt: Optional[str] = None,
+        rag_notes: Optional[List[Dict[str, Any]]] = None,
+        global_concept_map: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Executes a single Gemini API completion on chunk_text with optional chained context and 429 backoff."""
+        """Executes a single Gemini API completion on chunk_text with optional Two-Tier RAG context and 429 backoff."""
         prompt = build_note_extraction_prompt(
             chunk_text=chunk_text,
             previous_notes_json=previous_notes_json,
             existing_titles=existing_titles,
             unified_general_title=unified_general_title,
-            custom_system_prompt=custom_system_prompt
+            custom_system_prompt=custom_system_prompt,
+            rag_notes=rag_notes,
+            global_concept_map=global_concept_map,
         )
 
         max_retries = 3
@@ -121,6 +125,9 @@ class GeminiApiClient(BaseAiProvider):
 
         parsed_notes = self._parse_notes_json(notes_json_str)
         if not parsed_notes and notes_json_str.strip():
+            if AiResponseParser.is_valid_empty_notes_response(notes_json_str):
+                log_debug("Gemini API explicitly returned valid empty notes array (no new concepts in chunk).")
+                return []
             log_error(f"Failed to parse notes from Gemini API response: {notes_json_str[:300]}")
             raise GeminiApiError(f"Failed to parse notes from Gemini API response: {notes_json_str[:200]}")
 
@@ -131,11 +138,15 @@ class GeminiApiClient(BaseAiProvider):
         self,
         text_content,
         on_progress: Optional[Callable[[str], None]] = None,
-        custom_system_prompt: Optional[str] = None
+        custom_system_prompt: Optional[str] = None,
+        semantic_memory_service: Optional[Any] = None,
+        reranker_service: Optional[Any] = None,
     ):
         """
         Generates Zettelkasten-style notes from the given text content using the Gemini API.
-        Uses universal dynamic semantic chunking with chained context for large documents.
+        Uses universal dynamic semantic chunking with an in-memory vector RAG pool (NoteRagPool)
+        with Two-Tier retrieval (Global Concept Map + Reranked Focal Notes).
+        The local embedding and reranker models are strictly mandatory.
         """
         if not text_content or not str(text_content).strip():
             return []
@@ -149,6 +160,19 @@ class GeminiApiClient(BaseAiProvider):
         )
         if not sanitized_text:
             return []
+
+        # Enforce mandatory embedding service & reranker service & initialize RAG pool
+        from note_rag_pool import NoteRagPool
+        from semantic_memory_service import SemanticMemoryService
+        from reranker_service import RerankerService
+
+        memory_service = semantic_memory_service or SemanticMemoryService()
+        rank_service = reranker_service or RerankerService()
+        rag_pool = NoteRagPool(
+            semantic_memory_service=memory_service,
+            reranker_service=rank_service,
+            ai_provider=self
+        )
 
         # Safe high ceiling to protect against corrupt/infinite memory consumption
         MAX_SAFE_CHARS = 2_000_000
@@ -164,23 +188,19 @@ class GeminiApiClient(BaseAiProvider):
                 on_progress("AI is extracting notes...")
             return self._execute_inference(sanitized_text, custom_system_prompt=custom_system_prompt)
 
-        # 2. Document exceeds budget -> dynamic semantic chunking with Chained JSON Context
+        # 2. Document exceeds budget -> dynamic semantic chunking with vector RAG pool
         log_debug(
             f"Document size (~{total_tokens} tokens) exceeds single-pass budget ({max_chunk_tokens} tokens). "
-            "Splitting document into semantic chunks with chained context for Gemini..."
+            "Splitting document into semantic chunks with vector RAG pool for Gemini..."
         )
         chunks = semantic_chunker.chunk_text(
             sanitized_text,
             max_chunk_tokens=max_chunk_tokens,
             overlap_tokens=semantic_chunker.DEFAULT_OVERLAP_TOKENS
         )
-        log_debug(f"Document split into {len(chunks)} chunks for sequential chained Gemini processing.")
+        log_debug(f"Document split into {len(chunks)} chunks for sequential RAG Gemini processing.")
 
-        all_notes: List[Dict[str, Any]] = []
-        seen_titles: Set[str] = set()
-        all_seen_titles_list: List[str] = []
         unified_general_title: Optional[str] = None
-        previous_chunk_json: Optional[str] = None
 
         for idx, chunk in enumerate(chunks):
             progress_msg = f"AI is extracting notes (Part {idx + 1}/{len(chunks)})..."
@@ -188,10 +208,17 @@ class GeminiApiClient(BaseAiProvider):
             if on_progress:
                 on_progress(progress_msg)
             try:
+                # Retrieve two-tier context: Tier 1 global concept map + Tier 2 reranked focal notes
+                tier1_concepts, tier2_focal_notes = rag_pool.retrieve_two_tier_context(
+                    query_chunk=chunk,
+                    total_budget=5200,
+                    top_k_focal=8
+                )
                 chunk_notes = self._execute_inference(
                     chunk_text=chunk,
-                    previous_notes_json=previous_chunk_json,
-                    existing_titles=all_seen_titles_list if all_seen_titles_list else None,
+                    rag_notes=tier2_focal_notes if tier2_focal_notes else None,
+                    global_concept_map=tier1_concepts if tier1_concepts else None,
+                    existing_titles=rag_pool.get_all_titles() if len(rag_pool) > 0 and not tier1_concepts else None,
                     unified_general_title=unified_general_title,
                     custom_system_prompt=custom_system_prompt,
                 )
@@ -201,33 +228,11 @@ class GeminiApiClient(BaseAiProvider):
                         unified_general_title = note["general_title"].strip()
 
                     note["_chunk_id"] = idx
-                    title = note.get("title", "").strip()
-                    title_key = title.lower()
-                    if title_key and title_key not in seen_titles:
-                        seen_titles.add(title_key)
-                        all_seen_titles_list.append(title)
-                        all_notes.append(note)
-                        new_chunk_notes.append(note)
-                    elif not title_key:
-                        all_notes.append(note)
-                        new_chunk_notes.append(note)
+                    new_chunk_notes.append(note)
 
-                # Prepare previous_chunk_json for subsequent chunk (pure concept reference: id, title, brief content)
+                # Collect new notes into RAG pool (indexes embeddings immediately)
                 if new_chunk_notes:
-                    ref_notes = [
-                        {
-                            "id": n.get("id", i + 1),
-                            "title": n.get("title", ""),
-                            "content": (n.get("content", "")[:250] + "...") if len(n.get("content", "")) > 250 else n.get("content", "")
-                        }
-                        for i, n in enumerate(new_chunk_notes)
-                        if n.get("title")
-                    ]
-                    clean_export = {
-                        "general_title": unified_general_title or "",
-                        "notes": ref_notes
-                    }
-                    previous_chunk_json = json.dumps(clean_export, ensure_ascii=False, indent=2)
+                    rag_pool.add_notes(new_chunk_notes)
 
                 # Gentle inter-chunk pacing to respect RPM quotas
                 if idx < len(chunks) - 1:
@@ -235,10 +240,11 @@ class GeminiApiClient(BaseAiProvider):
 
             except Exception as ce:
                 log_error(f"Error processing chunk {idx + 1}/{len(chunks)} in Gemini: {ce}")
-                if not all_notes and idx == len(chunks) - 1:
+                if len(rag_pool) == 0 and idx == len(chunks) - 1:
                     raise
 
-        # Guarantee sequential global 1-based unique IDs across all chunks
+        # Retrieve all accumulated notes from RAG pool
+        all_notes = rag_pool.get_all_notes()
         for idx, note in enumerate(all_notes):
             note["id"] = idx + 1
             if unified_general_title:
@@ -280,6 +286,11 @@ class GeminiApiClient(BaseAiProvider):
 
         if memory_service and memory_service.is_model_available():
             try:
+                # Ensure notes are consolidated & deduplicated before computing knowledge graph links
+                if hasattr(memory_service, "consolidate_and_deduplicate_notes"):
+                    deduped = memory_service.consolidate_and_deduplicate_notes(notes, ai_provider=self)
+                    if isinstance(deduped, list) and (not deduped or isinstance(deduped[0], dict)):
+                        notes = deduped
                 if on_progress:
                     on_progress("Computing semantic connections with Harrier embedding...")
                 link_pairs, embeddings, eff_threshold = memory_service.compute_semantic_links(
@@ -339,6 +350,39 @@ class GeminiApiClient(BaseAiProvider):
             return notes
 
         return notes
+
+    def synthesize_note_cluster(
+        self,
+        cluster_notes: List[Dict[str, Any]],
+        on_progress: Optional[Callable[[str], None]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Synthesizes an N-way duplicate cluster into a single cohesive note via Gemini API."""
+        if not cluster_notes or len(cluster_notes) < 2:
+            return cluster_notes[0] if cluster_notes else None
+
+        from prompt_templates import SYSTEM_INSTRUCTION_SYNTHESIS, build_note_synthesis_prompt
+
+        prompt = build_note_synthesis_prompt(cluster_notes)
+        full_content = f"{SYSTEM_INSTRUCTION_SYNTHESIS}\n\n{prompt}"
+        log_debug(f"GeminiApiClient: Executing N-way synthesis for {len(cluster_notes)} notes...")
+        if on_progress:
+            on_progress(f"Synthesizing {len(cluster_notes)} overlapping notes into unified concept...")
+
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=full_content,
+            )
+            raw_content = response.text if response and hasattr(response, 'text') and response.text else ""
+            if raw_content:
+                parsed = AiResponseParser.parse_synthesized_note(raw_content)
+                if parsed:
+                    log_debug(f"GeminiApiClient: Successfully synthesized cluster into '{parsed['title']}'")
+                    return parsed
+        except Exception as e:
+            log_error(f"GeminiApiClient: Failed to synthesize note cluster: {e}\n{traceback.format_exc()}")
+
+        return None
 
 # This block provides an example usage when the file is run directly (for testing purposes).
 if __name__ == '__main__':

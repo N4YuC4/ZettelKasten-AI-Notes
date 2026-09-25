@@ -36,7 +36,7 @@ def test_chunk_text_reduces_14_chunks_to_4_or_5_for_73k_doc():
     old_chunks = semantic_chunker.chunk_text(doc, max_chunk_tokens=1800, overlap_tokens=200)
     assert len(old_chunks) >= 12
 
-    assert semantic_chunker.DEFAULT_OVERLAP_TOKENS == 100
+    assert semantic_chunker.DEFAULT_OVERLAP_TOKENS == 0
 
     # Under new dynamic 4,500 token budget:
     new_chunks = semantic_chunker.chunk_text(

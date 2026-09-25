@@ -265,8 +265,8 @@ def test_generate_zettelkasten_notes_calls_on_progress():
     assert any("notes" in m.lower() for m in progress_messages)
 
 
-def test_default_context_window_is_128k():
-    assert LocalGgufClient.DEFAULT_CONTEXT_WINDOW == 131072
+def test_default_context_window_is_16k():
+    assert LocalGgufClient.DEFAULT_CONTEXT_WINDOW == 16384
 
 
 def test_execute_inference_with_chained_context():
@@ -909,7 +909,27 @@ def test_execute_inference_sampling_parameters_forwarded():
     assert "response_format" not in call_kwargs
 
 
+def test_execute_inference_returns_empty_list_on_valid_empty_notes_response():
+    client = LocalGgufClient.__new__(LocalGgufClient)
+    client.n_ctx = 8192
+    mock_llm = MagicMock()
+    # Simulate LLM returning valid JSON with notes: [] when chunk only has repeated concepts
+    empty_payload = json.dumps({
+        "general_title": "Economics",
+        "conceptual_analysis": {
+            "core_thesis": "Revisiting empirical results.",
+            "candidate_audit": [
+                {"candidate": "Beta Convergence", "status": "REJECTED_DUPLICATE"}
+            ],
+            "atomic_breakdown": []
+        },
+        "notes": []
+    })
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": empty_payload}}]
+    }
+    client.llm = mock_llm
 
-
-
+    res = client._execute_inference("Sample text that repeats previously extracted concepts.")
+    assert res == []
 

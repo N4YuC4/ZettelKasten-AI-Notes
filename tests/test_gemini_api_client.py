@@ -228,8 +228,8 @@ def test_generate_zettelkasten_notes_multi_chunk_chained_context(monkeypatch):
     client = GeminiApiClient()
     client.client = MagicMock()
 
-    # Generate text large enough to trigger multi-chunk (> 4500 tokens / ~15,000 chars)
-    paras = [f"Paragraph {i}: Detailed discourse on formal cognitive models and neural logic." for i in range(250)]
+    # Generate text large enough to trigger multi-chunk (> 6000 tokens / ~20,000 chars)
+    paras = [f"Paragraph {i}: Detailed discourse on formal cognitive models and neural logic." for i in range(400)]
     large_text = "\n\n".join(paras)
 
     progress_reports = []
@@ -307,5 +307,25 @@ def test_execute_inference_429_backoff_retry_success(monkeypatch):
     assert notes[0]["title"] == "Retry Success Note"
 
 
+def test_execute_inference_returns_empty_list_on_valid_empty_notes_response(monkeypatch):
+    import json
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy_key")
+    client = GeminiApiClient()
+    client.client = MagicMock()
 
+    resp = MagicMock()
+    resp.text = json.dumps({
+        "general_title": "Physics",
+        "conceptual_analysis": {
+            "core_thesis": "Re-elaborating principles.",
+            "candidate_audit": [
+                {"candidate": "Quantum Entanglement", "status": "REJECTED_DUPLICATE"}
+            ],
+            "atomic_breakdown": []
+        },
+        "notes": []
+    })
+    client.client.models.generate_content.return_value = resp
 
+    res = client._execute_inference("Sample text that repeats already established concepts.")
+    assert res == []
