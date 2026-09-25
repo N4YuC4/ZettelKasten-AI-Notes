@@ -23,11 +23,26 @@ class DatabaseManager:
     Settings are delegated to the dedicated SettingsManager (db/settings.db).
     """
     def __init__(self, db_path: Optional[str] = None, init_tables: bool = True, settings_manager: Optional[SettingsManager] = None):
-        self.db_path = db_path if db_path is not None else DATABASE_FILE
+        if db_path is not None:
+            self.db_path = db_path
+        else:
+            default_notes_path = os.path.abspath(os.path.join("db", "notes.db"))
+            if os.path.abspath(DATABASE_FILE) != default_notes_path:
+                self.db_path = DATABASE_FILE
+            else:
+                # Check if user configured a CUSTOM_DB_PATH in settings
+                default_settings = SettingsManager.get_instance()
+                custom_db = default_settings.get_setting("CUSTOM_DB_PATH")
+                if custom_db and os.path.exists(os.path.dirname(os.path.abspath(custom_db))):
+                    self.db_path = os.path.abspath(custom_db)
+                else:
+                    self.db_path = DATABASE_FILE
+
         dir_name = os.path.dirname(self.db_path)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
         self._local = threading.local()
+
         if settings_manager is not None:
             self.settings_manager = settings_manager
         else:
@@ -37,6 +52,7 @@ class DatabaseManager:
                 self.settings_manager = SettingsManager(db_path=f"{base}_settings{ext}")
             else:
                 self.settings_manager = SettingsManager.get_instance()
+
         if init_tables:
             self.ensure_schema()
 

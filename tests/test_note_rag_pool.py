@@ -511,3 +511,65 @@ def test_note_rag_pool_handles_list_ids_and_nested_connections():
         for c in n["connections"]:
             assert isinstance(c, str)
 
+
+def test_retrieve_relevant_notes_fallback_when_below_min_similarity():
+    """Verifies that retrieve_relevant_notes falls back to top notes when no candidates meet min_similarity."""
+    mock_memory, mock_reranker = create_mock_services()
+
+    # Create dummy embeddings
+    v1 = np.zeros(1024, dtype=np.float32)
+    v1[0] = 1.0
+    v2 = np.zeros(1024, dtype=np.float32)
+    v2[1] = 1.0
+
+    mock_memory.embed_texts.return_value = np.vstack([v1, v2])
+    # Query vector has 0.1 similarity with v1 and 0.05 with v2
+    q_vec = np.zeros(1024, dtype=np.float32)
+    q_vec[0] = 0.1
+    q_vec[1] = 0.05
+    q_vec[2] = 0.99
+    q_vec = q_vec / np.linalg.norm(q_vec)
+    mock_memory.embed_text.return_value = q_vec
+
+    pool = NoteRagPool(semantic_memory_service=mock_memory, reranker_service=mock_reranker)
+    pool.add_notes([
+        {"id": 1, "title": "Note Alpha", "content": "Alpha content", "connections": []},
+        {"id": 2, "title": "Note Beta", "content": "Beta content", "connections": []}
+    ])
+
+    # With min_similarity=0.99, neither note passes threshold (dot product is ~0.1)
+    retrieved = pool.retrieve_relevant_notes("Some search query", min_similarity=0.99)
+    assert len(retrieved) > 0
+    assert any(n["title"] == "Note Alpha" for n in retrieved)
+
+
+def test_clean_and_remap_notes_transitive_redirects():
+    """Verifies that transitive redirects (C -> B -> A) are properly resolved to A in connections and wikilinks."""
+    mock_memory, mock_reranker = create_mock_services()
+    v1 = np.ones(1024, dtype=np.float32)
+    v1 = v1 / np.linalg.norm(v1)
+    mock_memory.embed_texts.return_value = np.vstack([v1])
+
+    pool = NoteRagPool(semantic_memory_service=mock_memory, reranker_service=mock_reranker)
+    pool.add_notes([
+        {
+            "id": 1,
+            "title": "Alpha Note",
+            "content": "This note references [[Note Charlie]] and [[Note Bravo|alias]].",
+            "connections": ["Note Charlie", "Note Bravo"]
+        }
+    ])
+
+    # Simulate multi-hop transitive redirects: Charlie -> Bravo -> Final Target
+    pool._title_redirects["Note Charlie"] = "Note Bravo"
+    pool._title_redirects["Note Bravo"] = "Final Target"
+
+    cleaned = pool._clean_and_remap_notes()
+    assert len(cleaned) == 1
+    assert "Final Target" in cleaned[0]["connections"]
+    assert "Note Charlie" not in cleaned[0]["connections"]
+    assert "Note Bravo" not in cleaned[0]["connections"]
+    assert "[[Final Target]]" in cleaned[0]["content"]
+    assert "[[Final Target|alias]]" in cleaned[0]["content"]
+
+

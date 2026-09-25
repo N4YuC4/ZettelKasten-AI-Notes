@@ -469,13 +469,9 @@ class AppController:
                 self.page.title = f"Zettelkasten AI Notes - {msg_or_title}"
                 self.update_header_status(msg_or_title, self.state.current_note_collection)
                 if self.editor_workspace:
-                    curr_val = self.editor_workspace.get_content()
-                    lines = curr_val.split('\n') if curr_val else []
-                    if lines:
-                        lines[0] = f"# {msg_or_title}"
-                    else:
-                        lines = [f"# {msg_or_title}"]
-                    self.editor_workspace.set_content('\n'.join(lines), mark_dirty=False)
+                    updated_content = self.note_service.get_note_content(note_id)
+                    if updated_content is not None:
+                        self.editor_workspace.set_content(updated_content, mark_dirty=False)
 
             if self.right_panel:
                 self.right_panel.mind_map_widget.invalidate_cache()
@@ -701,28 +697,15 @@ class AppController:
                 message="Extracting text from PDF... Please wait.",
                 on_cancel=self.cancel_worker
             )
-            try:
-                extracted_text = pdf_processor.extract_text_from_pdf(pdf_path)
-            except Exception as ex:
-                self.dialog_manager.hide_loading()
-                time.sleep(0.35)
-                self.show_snack_bar(f"Failed to read PDF: {ex}", color=ft.Colors.ERROR)
-                return
-
-            if extracted_text and extracted_text.strip():
-                self.dialog_manager.update_loading_message("Generating notes... Please wait.")
-                worker = AiNoteGeneratorWorker(
-                    extracted_text,
-                    on_finished=self.handle_ai_finished,
-                    on_error=self.handle_ai_error,
-                    on_progress=lambda msg: self.dialog_manager.update_loading_message(msg)
-                )
-                self.active_worker = worker
-                self.page.run_thread(worker.run)
-            else:
-                self.dialog_manager.hide_loading()
-                time.sleep(0.35)
-                self.show_snack_bar("The selected PDF is empty or contains no readable text.", color=ft.Colors.ERROR)
+            worker = AiNoteGeneratorWorker(
+                pdf_path,
+                on_finished=self.handle_ai_finished,
+                on_error=self.handle_ai_error,
+                on_progress=lambda msg: self.dialog_manager.update_loading_message(msg),
+                db_path=self.db_manager.db_path
+            )
+            self.active_worker = worker
+            self.page.run_thread(worker.run)
         else:
             self.show_snack_bar("No PDF file selected.", color=ft.Colors.TERTIARY)
 

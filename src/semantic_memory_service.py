@@ -13,6 +13,11 @@ from collections import defaultdict, deque
 import numpy as np
 from logger import log_debug, log_error
 import local_models_catalog
+from graph_reconciliation import (
+    canonical_pair,
+    resolve_all_terminal_redirects,
+    remap_notes_links_and_content,
+)
 
 
 class EmbeddingModelNotFoundError(FileNotFoundError):
@@ -253,7 +258,7 @@ class SemanticMemoryService:
                 neighbors = neighbors[:max_candidates_per_note]
 
             for target_id, sim in neighbors:
-                canonical = (min(source_id, target_id), max(source_id, target_id))
+                canonical = canonical_pair(source_id, target_id)
                 if canonical not in candidate_pair_map or sim > candidate_pair_map[canonical]:
                     candidate_pair_map[canonical] = sim
 
@@ -444,38 +449,15 @@ class SemanticMemoryService:
                     f"into '{notes[primary_idx].get('title')}' (cluster of {len(cluster)} notes)."
                 )
 
+        # Resolve transitive title redirects to terminal targets
+        terminal_redirects = resolve_all_terminal_redirects(title_redirects)
+
         # Build surviving notes list, remap connections, and remap markdown wikilinks
-        surviving_notes: List[Dict[str, Any]] = []
-        for idx, n in enumerate(notes):
-            if idx in dup_to_primary:
-                continue
-            note_copy = dict(n)
-            orig_conns = note_copy.get("connections", [])
-            title_clean = note_copy.get("title", "").strip().casefold()
-            if isinstance(orig_conns, list):
-                new_conns = []
-                seen_conns = set()
-                for c in orig_conns:
-                    if not isinstance(c, str):
-                        continue
-                    resolved = title_redirects.get(c, c)
-                    resolved_lower = resolved.strip().casefold()
-                    if resolved_lower == title_clean or resolved_lower in seen_conns:
-                        continue
-                    seen_conns.add(resolved_lower)
-                    new_conns.append(resolved)
-                note_copy["connections"] = new_conns
-
-            # Remap body wikilinks for any redirected titles
-            for old_t, new_t in title_redirects.items():
-                if old_t and new_t and old_t != new_t:
-                    note_copy["content"] = re.sub(
-                        r'\[\[' + re.escape(old_t) + r'(\]\]|\|)',
-                        lambda m, nt=new_t: f"[[{nt}{m.group(1)}",
-                        note_copy.get("content", "")
-                    )
-
-            surviving_notes.append(note_copy)
+        surviving_notes = remap_notes_links_and_content(
+            notes,
+            terminal_redirects,
+            skip_indices=dup_to_primary
+        )
 
         log_debug(
             f"SemanticMemoryService: Deduplication consolidated {len(notes)} notes into "
@@ -683,8 +665,9 @@ class SemanticMemoryService:
                                 best_pair = (u, v)
 
                     if best_pair and best_sim >= bridge_threshold:
-                        canonical = (min(best_pair[0], best_pair[1]), max(best_pair[0], best_pair[1]))
-                        existing_set = {(min(a, b), max(a, b)) for a, b in link_pairs}
+                        u_node, v_node = best_pair
+                        canonical = canonical_pair(u_node, v_node)
+                        existing_set = {canonical_pair(a, b) for a, b in link_pairs}
                         if canonical not in existing_set:
                             link_pairs.append(canonical)
                             new_degrees[canonical[0]] += 1

@@ -3,6 +3,7 @@ import flet as ft
 import flet.canvas as cv
 import math
 from logger import log_debug
+from graph_reconciliation import canonical_pair
 
 # The MindMapWidget is a custom Flet control derived from ft.GestureDetector.
 # It uses Flet Canvas shapes to draw a mind map of Zettelkasten notes and connections,
@@ -307,7 +308,7 @@ class MindMapWidget(ft.Container):
             if source_id not in self.notes or target_id not in self.notes:
                 continue
 
-            pair_key = (min(source_id, target_id), max(source_id, target_id))
+            pair_key = canonical_pair(source_id, target_id)
             if pair_key in seen_pairs:
                 continue
             seen_pairs.add(pair_key)

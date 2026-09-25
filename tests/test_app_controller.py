@@ -188,3 +188,27 @@ def test_controller_cancel_worker_flow(test_setup):
         mock_sleep.assert_called_with(0.35)
         mock_snack.assert_called_once()
 
+
+def test_controller_handle_rename_note_preserves_content_structure(test_setup):
+    """Verifies that handle_rename_note accurately updates editor workspace content without duplicate headers."""
+    controller, db, note_service, state, dialog_manager = test_setup
+
+    initial_content = "\n\n# Original Title\n\nSome body text."
+    controller.new_note_internal("Original Title", initial_content)
+    note_id = state.current_note_id
+    assert note_id is not None
+
+    with patch.object(controller, "show_snack_bar"):
+        controller.handle_rename_note(note_id, "Renamed Title")
+
+    assert state.current_note_title == "Renamed Title"
+    assert controller.editor_workspace.set_content.call_count == 2
+    saved_arg = controller.editor_workspace.set_content.call_args[0][0]
+    assert "# Renamed Title" in saved_arg
+    assert "# Original Title" not in saved_arg
+    # Ensure there is no duplicated title heading
+    headings = [l for l in saved_arg.split('\n') if l.strip().startswith('# ')]
+    assert len(headings) == 1
+    assert headings[0] == "# Renamed Title"
+
+

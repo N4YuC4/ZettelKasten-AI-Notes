@@ -27,7 +27,9 @@ A powerful, privacy-first desktop knowledge management system implementing the *
   * **Global Union-Find Reconciliation**: Discovers multi-way transitive duplicate clusters across document chunks and consolidates them via LLM or algorithmic non-redundant synthesis while remapping wikilinks and graph edges.
 * **CPU Cross-Encoder Reranker (`reranker_service.py`)**: High-precision semantic relevance scoring powered by `Qwen3-Reranker-0.6B`. Evaluates `(query, note)` pairs using instruction-aware cross-attention and calibrated sigmoid logit difference (`logit("yes") - logit("no")`). Runs strictly on CPU (`n_threads=2`, `n_gpu_layers=0`) to preserve 100% of GPU VRAM for generation LLMs.
 * **Process-Isolated Execution**: Local inference runs inside an isolated `multiprocessing` worker. This prevents GUI thread deadlocks with Wayland/Vulkan presentation hooks, ensures a 100% responsive UI during heavy computation, and guarantees immediate RAM/VRAM reclamation upon completion or cancellation.
-* **Intelligent Response Parsing (`AiResponseParser`)**: Robust multi-strategy JSON extraction that sanitizes connections, cleans citations (`[1]`, `[Smith et al.]`), ignores structural markers (Figure, Table, Section, Clause), and repairs malformed LLM responses.
+* **Intelligent Response Parsing & JSON Repair (`json_repair_engine.py` & `ai_response_parser.py`)**: Dedicated parsing and repair engine that sanitizes connections, cleans citations (`[1]`, `[Smith et al.]`), balances unclosed brackets and truncated strings from LLM context limits, and performs KaTeX-safe LaTeX escaping (preserving backslashes in math blocks and converting text-mode operators into KaTeX symbols).
+* **Multilingual Concept Matching & Deduplication (`concept_matcher.py`)**: Domain-agnostic concept matcher utilizing character 4-gram overlap, language-agnostic token normalization and stemming, qualifier stripping, and multi-tier duplicate concept detection.
+* **Loop-Safe Graph Reconciliation (`graph_reconciliation.py`)**: Graph utilities that transitively resolve title redirects (preventing cyclic loops), normalize connections, and ensure canonical pair ordering across heterogeneous integer and UUID note IDs.
 * **Dynamic Semantic Chunking (`semantic_chunker.py`)**: Universal dynamic chunker shared between Cloud and Local AI. Automatically splits long PDF extractions along semantic paragraph, sentence, and word boundaries with adaptive token overlap (~4500 tokens default) to prevent context truncation and ensure coherent note synthesis.
 
 ### 📦 In-App Model Manager & Downloader
@@ -77,7 +79,7 @@ A powerful, privacy-first desktop knowledge management system implementing the *
 * **Draggable Splitters**: Drag vertical and horizontal splitter handles to customize pane proportions.
 
 ### 💾 Robust SQLite Persistence & Privacy (`database_manager.py` & `settings_manager.py`)
-* **Local Note Storage (`db/notes.db`)**: Configured with **Write-Ahead Logging (WAL)** mode for fast, non-blocking concurrent reads and writes, thread-local connections (`DatabaseManager._local.conn`), and enforced foreign keys (`PRAGMA foreign_keys = ON`) with cascading deletes.
+* **Local Note Storage (`db/notes.db`)**: Configured with **Write-Ahead Logging (WAL)** mode for fast, non-blocking concurrent reads and writes, thread-local connections (`DatabaseManager._local.conn`), enforced foreign keys (`PRAGMA foreign_keys = ON`) with cascading deletes, and support for user-configurable custom database paths (`CUSTOM_DB_PATH`).
 * **Dedicated Settings Repository (`db/settings.db`)**: Manages UI state, AI preferences, and API secrets locally with isolated connections and factory reset capability.
 * **100% Privacy & Zero Data Leakage**: All databases (`db/`) and rotating application logs (`logs/`) are strictly git-ignored via `.gitignore`. Your personal notes, local AI preferences, and API keys reside exclusively on your machine and are never tracked in version control.
 
@@ -106,12 +108,14 @@ The codebase is designed with clean architecture and SOLID principles, strictly 
    │ EditorWorkspaceView│                                         │ DatabaseManager     │
    │ RightPanelView     │                                         │ SettingsManager     │
    │ DialogManager      │                                         │ NoteRagPool         │
-   │ Splitters          │                                         │ RerankerService     │
-   └────────────────────┘                                         │ SemanticMemory      │
-                                                                  │ HardwareChecker     │
+   │ └─ Dialogs Package │                                         │ RerankerService     │
+   │ Splitters          │                                         │ SemanticMemory      │
+   └────────────────────┘                                         │ HardwareChecker     │
                                                                   │ ModelDownloader     │
                                                                   │ PdfProcessor        │
                                                                   │ SemanticChunker     │
+                                                                  │ ConceptMatcher      │
+                                                                  │ GraphReconciliation │
                                                                   └──────────┬──────────┘
                                                                              │
                                                                ┌─────────────▼────────────┐
@@ -119,8 +123,8 @@ The codebase is designed with clean architecture and SOLID principles, strictly 
                                                                ├─────────────┬────────────┤
                                                                │             │            │
                                                                ▼             ▼            ▼
-                                                          GeminiClient  LocalGgufClient  Parser
-                                                          (Cloud SDK)   (Vulkan / GGUF)  (Sanitizer)
+                                                          GeminiClient  LocalGgufClient  JsonRepair
+                                                          (Cloud SDK)   (Vulkan / GGUF)  & Parser
                                                                              │
                                                                ┌─────────────┴────────────┐
                                                                │ CPU Auxiliary Inference  │
@@ -235,20 +239,27 @@ Zettelkasten-AI-Notes/
 ├── src/
 │   ├── ui/                         # Modular UI presentation layer
 │   │   ├── __init__.py             # Exports for UI components
-│   │   ├── dialog_manager.py       # Modal dialogs (Settings, Downloader, Confirmations)
+│   │   ├── dialogs/                # Modular dialog builder components
+│   │   │   ├── __init__.py         # Exports for dialog builders
+│   │   │   ├── model_manager_dialog.py # Model manager dialog with real-time download poller
+│   │   │   └── settings_dialog.py  # User settings and API key dialog
+│   │   ├── dialog_manager.py       # Modal dialog coordinator (Settings, Downloader, Confirmations)
 │   │   ├── editor_workspace.py     # Center editor workspace and quick actions
 │   │   ├── right_panel_view.py     # Mind Map canvas and linked notes list panel
 │   │   ├── sidebar_view.py         # Collection navigation, search, and note list
 │   │   └── splitters.py            # Draggable responsive splitter handles
 │   ├── ai_note_generator_worker.py # Background thread & isolated multiprocessing worker
 │   ├── ai_provider.py              # BaseAiProvider abstract interface & provider factory
-│   ├── ai_response_parser.py       # Multi-strategy JSON response parser & graph sanitizer
+│   ├── ai_response_parser.py       # Multi-strategy JSON response parser & graph sanitizer facade
 │   ├── app_controller.py           # Application controller orchestrating actions & events
 │   ├── app_state.py                # Reactive state container (dirty state, filters, notes)
-│   ├── database_manager.py         # Thread-safe SQLite repository (WAL mode, FKs, migrations)
+│   ├── concept_matcher.py          # Multilingual concept matching & lexical duplicate detection engine
+│   ├── database_manager.py         # Thread-safe SQLite repository (WAL mode, FKs, migrations, custom paths)
 │   ├── env_config.py               # Headless Vulkan & desktop environment initialization
 │   ├── gemini_api_client.py        # Google Gemini API client (google-genai SDK v2.22.0)
+│   ├── graph_reconciliation.py     # Transitive redirect resolution, canonical pairs & wikilink remapping
 │   ├── hardware_checker.py         # RAM/VRAM/GPU detection and safe execution boundaries
+│   ├── json_repair_engine.py       # Dedicated JSON repair, bracket balancing & LaTeX KaTeX sanitizer
 │   ├── local_gguf_client.py        # llama-cpp-python offline inference engine
 │   ├── local_models_catalog.py     # Curated local models catalog (Gemma 4 family)
 │   ├── logger.py                   # Centralized rotating file and console logger
@@ -266,14 +277,16 @@ Zettelkasten-AI-Notes/
 │   ├── semantic_chunker.py         # Universal dynamic semantic text chunker (sentence & paragraph boundary balancing)
 │   ├── semantic_memory_service.py  # Local CPU embedding inference (Microsoft Harrier 0.6B) and vector store
 │   └── settings_manager.py         # Dedicated SQLite configuration repository (db/settings.db)
-├── tests/                          # Automated pytest suite (268 tests across 21 files)
+├── tests/                          # Automated pytest suite (291 tests across 23 files)
 │   ├── conftest.py
 │   ├── test_ai_provider.py
 │   ├── test_ai_response_parser.py
 │   ├── test_ai_worker_and_pdf.py
 │   ├── test_app_controller.py
+│   ├── test_concept_and_json_engines.py
 │   ├── test_database_manager.py
 │   ├── test_gemini_api_client.py
+│   ├── test_graph_reconciliation.py
 │   ├── test_hardware_checker.py
 │   ├── test_local_gguf_client.py
 │   ├── test_local_models_catalog.py
@@ -312,7 +325,7 @@ In strict compliance with [`.gitignore`](.gitignore), all user-generated content
 The project includes an extensive automated test suite covering domain logic, UI view controls, AI parsers, SQLite transactions, RAG vector retrieval, cross-encoder reranking, and hardware detection:
 
 ```bash
-# Run the entire test suite (268 tests):
+# Run the entire test suite (291 tests):
 ./.venv/bin/pytest
 
 # Run tests with verbose output:
@@ -322,7 +335,7 @@ The project includes an extensive automated test suite covering domain logic, UI
 ./.venv/bin/pytest tests/test_note_rag_pool.py
 ```
 
-All **268 tests** execute and pass in ~15-16 seconds.
+All **291 tests** execute and pass in ~15-16 seconds.
 
 ---
 

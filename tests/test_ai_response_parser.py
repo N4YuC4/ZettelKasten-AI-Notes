@@ -847,5 +847,16 @@ def test_attach_links_to_notes_with_list_endpoints_and_ids():
     assert "Beta Concept" in attached[2]["connections"]
 
 
+def test_extract_body_paragraphs_leading_blank_lines():
+    """Verifies that leading blank lines before the main title do not prevent extract_body_paragraphs from skipping the title."""
+    content = "\n\n   \n# Main Concept Title\n\nFirst body paragraph explaining the core idea.\n\nSecond body paragraph with details.\n\n## Related Notes\n- [[Other Note]]"
+    paras = AiResponseParser.extract_body_paragraphs(content)
+    assert len(paras) == 2
+    assert paras[0] == "First body paragraph explaining the core idea."
+    assert paras[1] == "Second body paragraph with details."
+    assert not any("# Main Concept Title" in p for p in paras)
+
+
+
 
 

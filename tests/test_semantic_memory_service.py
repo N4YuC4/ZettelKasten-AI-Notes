@@ -492,5 +492,64 @@ def test_consolidate_lexical_fallback_deduplication():
         assert len(surviving) == 1
 
 
+def test_compute_candidate_pairs_and_semantic_links_mixed_id_types():
+    """Verifies that compute_candidate_pairs and compute_semantic_links handle heterogeneous ID types (int and str) without TypeError."""
+    service = SemanticMemoryService(model_path="/fake/path")
+
+    v1 = np.zeros(1024, dtype=np.float32)
+    v1[0] = 1.0
+    v2 = np.zeros(1024, dtype=np.float32)
+    v2[0] = 0.95
+    v2[1] = np.sqrt(1 - 0.95**2)
+
+    fake_matrix = np.vstack([v1, v2])
+
+    notes = [
+        {"id": 1, "title": "Note Int ID", "content": "Content with integer ID", "connections": []},
+        {"id": "uuid-str-id", "title": "Note Str ID", "content": "Content with string UUID", "connections": []}
+    ]
+
+    with patch.object(service, "embed_texts", return_value=fake_matrix):
+        # 1. Test compute_candidate_pairs
+        pairs, _ = service.compute_candidate_pairs(notes, similarity_threshold=0.8)
+        assert len(pairs) == 1
+        src, tgt, score = pairs[0]
+        assert score >= 0.8
+        assert {src, tgt} == {1, "uuid-str-id"}
+
+        # 2. Test compute_semantic_links
+        links, _, threshold = service.compute_semantic_links(notes, similarity_threshold=0.8)
+        assert len(links) == 1
+        assert {links[0][0], links[0][1]} == {1, "uuid-str-id"}
+
+
+def test_consolidate_transitive_redirects():
+    """Verifies that multi-step transitive redirects resolve correctly to the terminal title."""
+    service = SemanticMemoryService(model_path="/fake/path")
+
+    v1 = np.ones(1024, dtype=np.float32)
+    v1 = v1 / np.linalg.norm(v1)
+
+    fake_matrix = np.vstack([v1, v1, v1])
+
+    c_dup = "Alpha concept explanation in detail with thorough discussion of the underlying mechanism and domain rules. " * 3
+    notes = [
+        {"id": 1, "title": "Alpha Concept Framework", "content": c_dup + " extra", "connections": ["External Ref"]},
+        {"id": 2, "title": "Alpha Concept Framework (Overview)", "content": c_dup, "connections": []},
+        {"id": 3, "title": "External Ref", "content": "External note with comprehensive details referencing [[Alpha Concept Framework (Overview)]]. " * 2, "connections": ["Alpha Concept Framework (Overview)"]}
+    ]
+
+    with patch.object(service, "embed_texts", return_value=fake_matrix), \
+         patch.object(service, "embed_text", return_value=v1):
+
+        surviving = service.consolidate_and_deduplicate_notes(notes)
+        assert len(surviving) == 2
+        ext_note = next(n for n in surviving if n["title"] == "External Ref")
+        assert "Alpha Concept Framework" in ext_note["connections"]
+        assert "Alpha Concept Framework (Overview)" not in ext_note["connections"]
+        assert "[[Alpha Concept Framework]]" in ext_note["content"]
+
+
+
 
 

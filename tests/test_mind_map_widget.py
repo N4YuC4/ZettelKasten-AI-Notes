@@ -206,3 +206,22 @@ def test_mind_map_active_note_and_neighbor_highlighting():
     # Both active note A and neighbor B should have PRIMARY border
     assert len(primary_borders) == 2
 
+
+def test_mind_map_renders_mixed_type_ids_without_error():
+    """Verifies that MindMapWidget renders links between mixed int and str IDs without TypeError."""
+    import flet.canvas as cv
+    widget = MindMapWidget(None, None)
+    widget.canvas.update = MagicMock()
+    notes = [
+        (1, "Note 1", "Work"),
+        ("uuid-2", "Note 2", "Personal")
+    ]
+    links = [
+        (1, "uuid-2")
+    ]
+    # Previously min(1, 'uuid-2') threw TypeError: '<' not supported between instances of 'str' and 'int'
+    widget.update_map(notes, links)
+    line_shapes = [s for s in widget.canvas.shapes if isinstance(s, cv.Line)]
+    assert len(line_shapes) == 1
+
+

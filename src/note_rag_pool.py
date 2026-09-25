@@ -14,6 +14,11 @@ import numpy as np
 from logger import log_debug, log_error
 from semantic_memory_service import SemanticMemoryService, EmbeddingModelNotFoundError
 from reranker_service import RerankerService, RerankerModelNotFoundError
+from graph_reconciliation import (
+    resolve_transitive_redirect,
+    resolve_all_terminal_redirects,
+    remap_notes_links_and_content,
+)
 
 
 class NoteRagPool:
@@ -366,18 +371,15 @@ class NoteRagPool:
         sim_scores = np.dot(matrix, q_vec)
 
         # Stage 1: Gather top candidate notes via vector similarity
-        scored_candidates = []
-        for idx, sim in enumerate(sim_scores):
-            score = float(sim)
-            if score >= min_similarity:
-                scored_candidates.append((score, self._notes[idx]))
+        all_scored = [(float(sim), self._notes[idx]) for idx, sim in enumerate(sim_scores)]
+        all_scored.sort(key=lambda x: x[0], reverse=True)
 
-        scored_candidates.sort(key=lambda x: x[0], reverse=True)
-        top_candidates = [note for _, note in scored_candidates[:candidate_pool_size]]
+        above_threshold = [note for score, note in all_scored if score >= min_similarity]
+        top_candidates = above_threshold[:candidate_pool_size]
 
         if not top_candidates:
             # Fall back to top 3 notes even if below threshold
-            top_candidates = [note for _, note in scored_candidates[:3]]
+            top_candidates = [note for _, note in all_scored[:3]]
 
         if not top_candidates:
             return []
@@ -472,40 +474,14 @@ class NoteRagPool:
         """Returns the canonical titles of all notes currently accumulated in the pool."""
         return [n.get("title", "") for n in self._notes if n.get("title")]
 
+    def _resolve_title_redirect(self, title: str) -> str:
+        """Follows redirect chains transitively until reaching the terminal canonical title."""
+        return resolve_transitive_redirect(title, self._title_redirects)
+
     def _clean_and_remap_notes(self) -> List[Dict[str, Any]]:
         """Internal helper returning all current notes with connection redirects and body wikilinks resolved."""
-        cleaned_notes = []
-        for note in self._notes:
-            note_copy = dict(note)
-            orig_conns = note_copy.get("connections", [])
-            title_clean = note_copy.get("title", "").strip().casefold()
-            if isinstance(orig_conns, list):
-                new_conns = []
-                seen_conns = set()
-                for c in orig_conns:
-                    if not isinstance(c, str):
-                        continue
-                    # Remap if redirected
-                    resolved = self._title_redirects.get(c, c)
-                    resolved_lower = resolved.strip().casefold()
-                    # Skip self-links and duplicates
-                    if resolved_lower == title_clean or resolved_lower in seen_conns:
-                        continue
-                    seen_conns.add(resolved_lower)
-                    new_conns.append(resolved)
-                note_copy["connections"] = new_conns
-
-            # Remap body wikilinks for any redirected titles
-            for old_t, new_t in self._title_redirects.items():
-                if old_t and new_t and old_t != new_t:
-                    note_copy["content"] = re.sub(
-                        r'\[\[' + re.escape(old_t) + r'(\]\]|\|)',
-                        lambda m, nt=new_t: f"[[{nt}{m.group(1)}",
-                        note_copy.get("content", "")
-                    )
-
-            cleaned_notes.append(note_copy)
-        return cleaned_notes
+        terminal_redirects = resolve_all_terminal_redirects(self._title_redirects)
+        return remap_notes_links_and_content(self._notes, terminal_redirects)
 
     def reconcile_pool_globally(self) -> List[Dict[str, Any]]:
         """

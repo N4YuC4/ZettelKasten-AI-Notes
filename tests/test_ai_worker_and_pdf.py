@@ -546,3 +546,31 @@ def test_worker_saves_note_embeddings_atomically(temp_db, monkeypatch):
     assert len(emb_1) == 1024
     assert np.allclose(emb_1, fake_emb)
 
+
+def test_worker_handles_duplicate_titles_in_same_batch(temp_db, monkeypatch):
+    """Verifies that duplicate titles in the same AI batch are disambiguated and do not clobber base title mappings."""
+    notes_payload = [
+        {"title": "Duplicate Note", "content": "Content of original note.", "connections": ["Duplicate Note (2)"]},
+        {"title": "Duplicate Note", "content": "Content of second note.", "connections": ["Duplicate Note"]},
+    ]
+
+    mock_gemini = MagicMock()
+    mock_gemini.generate_zettelkasten_notes.return_value = notes_payload
+    mock_gemini.generate_note_links.return_value = notes_payload
+    monkeypatch.setattr("ai_note_generator_worker.GeminiApiClient", lambda: mock_gemini)
+
+    worker = AiNoteGeneratorWorker("dummy text for batch test", on_finished=None, on_error=None)
+    worker.run()
+
+    title_to_id = temp_db.get_all_note_titles_and_ids()
+    assert "Duplicate Note" in title_to_id
+    assert "Duplicate Note (2)" in title_to_id
+    id_orig = title_to_id["Duplicate Note"]
+    id_disambig = title_to_id["Duplicate Note (2)"]
+    assert id_orig != id_disambig
+
+    # Ensure connections between the two notes are established
+    links_orig = temp_db.get_note_links(id_orig)
+    assert id_disambig in links_orig
+
+
