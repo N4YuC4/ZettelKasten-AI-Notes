@@ -18,7 +18,17 @@ from ai_note_generator_worker import AiNoteGeneratorWorker
 from local_gguf_client import LocalGgufClient
 import local_models_catalog
 from app_state import AppState
-from ui import DialogManager, SidebarView, RightPanelView, EditorWorkspaceView
+from task_notification_manager import TaskNotificationManager
+from ui import (
+    DialogManager,
+    SidebarView,
+    RightPanelView,
+    EditorWorkspaceView,
+    ToastOverlay,
+    NotificationCenterBox,
+    NotificationCenterButton,
+)
+
 
 
 class AppController:
@@ -32,13 +42,15 @@ class AppController:
         db_manager: Any,
         note_service: NoteService,
         dialog_manager: DialogManager,
-        state: AppState
+        state: AppState,
+        task_notification_manager: Optional[TaskNotificationManager] = None,
     ):
         self.page = page
         self.db_manager = db_manager
         self.note_service = note_service
         self.dialog_manager = dialog_manager
         self.state = state
+        self.task_notification_manager = task_notification_manager or TaskNotificationManager()
 
         self.sidebar: Optional[SidebarView] = None
         self.right_panel: Optional[RightPanelView] = None
@@ -48,6 +60,9 @@ class AppController:
         self.theme_btn: Optional[ft.IconButton] = None
         self.auto_save_switch: Optional[ft.Switch] = None
         self.pdf_file_picker: Optional[ft.FilePicker] = None
+        self.notification_box: Optional[NotificationCenterBox] = None
+        self.toast_overlay: Optional[ToastOverlay] = None
+        self.notification_btn: Optional[NotificationCenterButton] = None
 
         self._auto_save_seq: int = 0
         self.active_worker: Optional[AiNoteGeneratorWorker] = None
@@ -71,7 +86,10 @@ class AppController:
         theme_btn: Optional[ft.IconButton] = None,
         auto_save_switch: Optional[ft.Switch] = None,
         pdf_file_picker: Optional[ft.FilePicker] = None,
-        category_chip: Optional[ft.Container] = None
+        category_chip: Optional[ft.Container] = None,
+        notification_box: Optional[NotificationCenterBox] = None,
+        toast_overlay: Optional[ToastOverlay] = None,
+        notification_btn: Optional[NotificationCenterButton] = None,
     ):
         """Attaches instantiated UI views and controls to the controller."""
         self.sidebar = sidebar
@@ -82,9 +100,44 @@ class AppController:
         self.theme_btn = theme_btn
         self.auto_save_switch = auto_save_switch
         self.pdf_file_picker = pdf_file_picker
+        self.notification_box = notification_box
+        self.toast_overlay = toast_overlay
+        self.notification_btn = notification_btn
+
+        if self.toast_overlay:
+            self.task_notification_manager.subscribe_toast(self.toast_overlay.show_toast)
 
     def show_snack_bar(self, message: str, color=ft.Colors.PRIMARY):
-        """Displays a non-blocking toast/snack-bar notification."""
+        """Displays a non-blocking sliding corner toast notification and records in history."""
+        # Determine notification type based on color & content
+        if color == ft.Colors.ERROR:
+            ntype = "error"
+            title = "Error"
+        elif color in (ft.Colors.TERTIARY, ft.Colors.AMBER_400):
+            ntype = "warning"
+            msg_lower = message.lower()
+            if "cancel" in msg_lower or "iptal" in msg_lower:
+                title = "Task Cancelled"
+            else:
+                title = "Warning"
+        else:
+            msg_lower = message.lower()
+            if any(k in msg_lower for k in ("success", "kaydedildi", "created", "deleted", "renamed", "linked")):
+                ntype = "success"
+                title = "Success"
+            else:
+                ntype = "info"
+                title = "Notification"
+
+        # 1. Slide-in corner toast and persistent box history
+        self.task_notification_manager.show_toast(
+            title=title,
+            message=message,
+            notification_type=ntype,
+            duration=3.5,
+        )
+
+        # 2. Safe fallback/standard snackbar synchronization
         sb = ft.SnackBar(
             content=ft.Text(message, color=ft.Colors.ON_PRIMARY_CONTAINER),
             bgcolor=color,
@@ -639,7 +692,7 @@ class AppController:
             log_error(f"Error opening settings dialog: {ex}")
             self.show_snack_bar(f"Error opening settings: {ex}", color=ft.Colors.ERROR)
 
-    def cancel_worker(self):
+    def cancel_worker(self, task_id: str = "pdf_ai_generation"):
         """Cancels active background AI worker and frees memory."""
         if self.active_worker:
             log_debug("User requested cancellation of AI note generation.")
@@ -649,14 +702,20 @@ class AppController:
             LocalGgufClient.unload_cached_model()
         except Exception as e:
             log_error(f"Error unloading cached model on cancel: {e}")
+        self.task_notification_manager.cancel_task(task_id, execute_callback=False, show_toast=False)
         self.dialog_manager.hide_loading()
         time.sleep(0.35)
         self.show_snack_bar("Note extraction cancelled.", color=ft.Colors.TERTIARY)
 
-    def handle_ai_finished(self, generated_notes):
+    def handle_ai_finished(self, generated_notes, task_id: str = "pdf_ai_generation"):
         """Invoked when AI note generation successfully completes."""
         self.active_worker = None
         log_debug(f"handle_ai_finished invoked with {len(generated_notes) if generated_notes else 0} notes.")
+        self.task_notification_manager.finish_task(
+            task_id=task_id,
+            completion_message=f"{len(generated_notes) if generated_notes else 0} notes generated.",
+            show_toast=False
+        )
         self.dialog_manager.hide_loading()
         time.sleep(0.35)
         if generated_notes:
@@ -673,13 +732,17 @@ class AppController:
         else:
             self.show_snack_bar("No notes could be generated by AI.", color=ft.Colors.TERTIARY)
 
-    def handle_ai_error(self, err_msg: str):
+    def handle_ai_error(self, err_msg: str, task_id: str = "pdf_ai_generation"):
         """Invoked when AI note generation fails."""
         self.active_worker = None
         log_error(f"handle_ai_error invoked: {err_msg}")
+        self.task_notification_manager.fail_task(
+            task_id=task_id,
+            error_message=err_msg,
+            show_toast=False
+        )
         self.dialog_manager.hide_loading()
         time.sleep(0.35)
-        self.dialog_manager.show_error("AI Note Generation Error", f"An error occurred during note generation:\n{err_msg}")
         self.show_snack_bar(f"Error: {err_msg}", color=ft.Colors.ERROR)
 
     async def trigger_pdf_generation(self, e=None):
@@ -692,16 +755,37 @@ class AppController:
         )
         if files:
             pdf_path = files[0].path
-            self.dialog_manager.show_loading(
-                title="Generating Notes from PDF",
-                message="Extracting text from PDF... Please wait.",
-                on_cancel=self.cancel_worker
+            filename = os.path.basename(pdf_path)
+            task_id = "pdf_ai_generation"
+
+            # Register ongoing task in Task Notification Center
+            self.task_notification_manager.start_task(
+                task_id=task_id,
+                title=f"AI Note Generation: {filename}",
+                initial_status="Extracting text from PDF...",
+                on_cancel=lambda: self.cancel_worker(task_id),
+                cancellable=True,
             )
+
+            # Slide-in corner toast informing user the operation runs in background
+            self.task_notification_manager.show_toast(
+                title="AI Note Generation Started",
+                message=f"'{filename}' is processing in the background. You can continue working.",
+                notification_type="info",
+                duration=4.0
+            )
+
+            def on_progress(msg: str):
+                self.task_notification_manager.update_task(
+                    task_id=task_id,
+                    status_text=msg
+                )
+
             worker = AiNoteGeneratorWorker(
                 pdf_path,
-                on_finished=self.handle_ai_finished,
-                on_error=self.handle_ai_error,
-                on_progress=lambda msg: self.dialog_manager.update_loading_message(msg),
+                on_finished=lambda notes: self.handle_ai_finished(notes, task_id=task_id),
+                on_error=lambda err: self.handle_ai_error(err, task_id=task_id),
+                on_progress=on_progress,
                 db_path=self.db_manager.db_path
             )
             self.active_worker = worker

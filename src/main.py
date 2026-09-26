@@ -19,7 +19,17 @@ from settings_manager import SettingsManager
 from note_service import NoteService
 from app_state import AppState
 from app_controller import AppController
-from ui import DialogManager, SidebarView, RightPanelView, EditorWorkspaceView, create_vertical_splitter
+from task_notification_manager import TaskNotificationManager
+from ui import (
+    DialogManager,
+    SidebarView,
+    RightPanelView,
+    EditorWorkspaceView,
+    create_vertical_splitter,
+    ToastOverlay,
+    NotificationCenterBox,
+    NotificationCenterButton,
+)
 
 
 def main(page: ft.Page):
@@ -43,9 +53,18 @@ def main(page: ft.Page):
 
     state = AppState(theme_mode=saved_theme, auto_save=auto_save_val)
     dialog_manager = DialogManager(page)
+    task_notif_manager = TaskNotificationManager()
+    task_notif_manager.bind_model_downloader()
 
     # 3. Dedicated Controller Initialization
-    controller = AppController(page, db_manager, note_service, dialog_manager, state)
+    controller = AppController(
+        page,
+        db_manager,
+        note_service,
+        dialog_manager,
+        state,
+        task_notification_manager=task_notif_manager,
+    )
 
     # 4. Global Widgets & Controls
     theme_btn = ft.IconButton(
@@ -127,6 +146,14 @@ def main(page: ft.Page):
         on_blur=controller.handle_editor_blur,
     )
 
+    # Non-blocking notification center & corner toast overlay
+    notification_box = NotificationCenterBox(page, task_notif_manager)
+    toast_overlay = ToastOverlay(page, on_open_box=notification_box.open_box)
+    notification_btn = NotificationCenterButton(task_notif_manager, on_click=notification_box.toggle)
+
+    page.overlay.append(toast_overlay)
+    page.overlay.append(notification_box)
+
     # Attach instantiated UI controls to controller
     controller.attach_views(
         sidebar=sidebar,
@@ -136,7 +163,10 @@ def main(page: ft.Page):
         collection_chip=collection_chip,
         theme_btn=theme_btn,
         auto_save_switch=auto_save_switch,
-        pdf_file_picker=pdf_file_picker
+        pdf_file_picker=pdf_file_picker,
+        notification_box=notification_box,
+        toast_overlay=toast_overlay,
+        notification_btn=notification_btn,
     )
 
     # 6. Responsive Splitters & Layout Assembly
@@ -179,6 +209,7 @@ def main(page: ft.Page):
                 tooltip="Generate AI Notes from PDF",
                 on_click=lambda e: page.run_task(controller.trigger_pdf_generation)
             ),
+            notification_btn,
             ft.Container(width=8),
         ],
         bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
